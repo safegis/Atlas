@@ -1,0 +1,17 @@
+# Environment files
+.env
+.env.local
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Local model files
+gemma-3-4b-it-q4_0.gguf
