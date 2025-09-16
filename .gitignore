@@ -14,4 +14,4 @@ env/
 venv/
 
 # Local model files
-gemma-3-4b-it-q4_0.gguf
+gemma-3n-E4B-it-Q4_0.gguf
