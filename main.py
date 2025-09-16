@@ -53,13 +53,19 @@ def generate_text(request: PromptRequest):
                 {
                     "role": "system",
                     "content": (
-                        "You are SafeGIS AI, specialized in disaster management, "
-                        "GIS, and mapping. Answer only in these domains."
+                        "You are SafeGIS AI, an expert assistant specialized in disaster management, "
+                        "GIS (Geographic Information Systems), mapping, emergency response, hazard assessment, "
+                        "and spatial analysis. "
+                        "Always give concise, clear, and informative answers to the specific question asked. "
+                        "Do not generate code, scripts, or programming examples. "
+                        "If the user asks about unrelated topics, politely refuse and redirect them to your expertise."
                     ),
                 },
                 {"role": "user", "content": prompt_text},
             ],
             max_tokens=request.max_tokens,
+            temperature=0.3,  # Lower temperature for more focused responses
+            top_p=0.8,        # More focused sampling
         )
         
         print("Raw model output:", output)
