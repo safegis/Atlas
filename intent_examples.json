@@ -41,7 +41,8 @@
     "turn off earthquake data",
     "remove earthquake hazards",
     "clear earthquake information from map",
-    "deactivate earthquake monitoring from map"
+    "deactivate earthquake monitoring from map",
+    "activate earthquake layer on map"
   ],
   "volcano": [
     "show volcano list on map",
@@ -64,6 +65,20 @@
     "turn off geological faults",
     "remove active fault data on the map",
     "clear fault line layer from map"
+  ],
+  "congestion": [
+    "enable congestion in the map",
+    "turn on congestion on the map",
+    "show congestion data",
+    "display traffic congestion",
+    "activate congestion layer",
+    "i want to see congestion in the map",
+    "show traffic jams on map",
+    "disable congestion in map",
+    "hide congestion in the map",
+    "turn off congestion layer",
+    "remove congestion data",
+    "clear traffic congestion from map"
   ],
   "qa": [
     "what is GIS",

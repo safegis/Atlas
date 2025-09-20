@@ -58,6 +58,7 @@ def load_intent_examples() -> Dict[str, List[str]]:
             "earthquake": ["earthquake data", "seismic activity"],
             "volcano": ["volcano list", "volcanic activity"],
             "activefaults": ["active faults", "fault lines"],
+            "congestion": ["traffic congestion", "congestion data"],
             "qa": ["what is GIS", "explain disaster"]
         }
     except json.JSONDecodeError as e:
@@ -257,6 +258,8 @@ def classify_intent_fallback(text: str) -> str:
         return "volcano"
     elif any(word in text_lower for word in ["fault", "geological"]):
         return "activefaults"
+    elif any(word in text_lower for word in ["congestion", "traffic jam", "traffic congestion"]):
+        return "congestion"
     elif any(word in text_lower for word in ["3d", "2d", "view", "perspective", "satellite", "terrain"]):
         return "view"
     elif any(word in text_lower for word in ["show", "find", "go to", "locate", "search", "navigate"]):
