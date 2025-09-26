@@ -55,6 +55,7 @@ def load_intent_examples() -> Dict[str, List[str]]:
         return {
             "map": ["show me location", "find city", "navigate to"],
             "view": ["3d mode", "2d view", "satellite"],
+            "mapstyle": ["satellite", "map style", "default style"],
             "earthquake": ["earthquake data", "seismic activity"],
             "volcano": ["volcano list", "volcanic activity"],
             "activefaults": ["active faults", "fault lines"],
@@ -264,6 +265,8 @@ def classify_intent_fallback(text: str) -> str:
         return "view"
     elif any(word in text_lower for word in ["show", "find", "go to", "locate", "search", "navigate"]):
         return "map"
+    elif any(word in text_lower for word in ["map style", "satellite", "dark mode", "light mode", "outdoors", "navigation"]) and not any(word in text_lower for word in ["3d", "2d", "view", "perspective"]):
+        return "mapstyle"
     else:
         return "qa"
 
