@@ -30,7 +30,7 @@ class LlamaCppWrapper:
                     {"role": "system", "content": "You are a helpful AI assistant for SafeGIS."},
                     {"role": "user", "content": prompt_text}
                 ],
-                max_tokens=512,
+                max_tokens=1024,  # Increased for longer Q&A responses
                 temperature=0.3,
                 top_p=0.8,
             )
@@ -43,5 +43,5 @@ class LlamaCppWrapper:
         except Exception as e:
             print(f"LLM Error: {e}")
             # Fallback to simple completion
-            response = self.llm(prompt_text, max_tokens=256, temperature=0.3)
+            response = self.llm(prompt_text, max_tokens=1024, temperature=0.3)
             return response.strip()
