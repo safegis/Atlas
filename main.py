@@ -39,7 +39,7 @@ print("Loading Gemma model...")
 try:
     llm = Llama(
         model_path=MODEL_PATH,
-        n_ctx=2048,
+        n_ctx=4096,  # Increased context window for longer conversations and responses
         n_threads=max(1, os.cpu_count() // 2),
         n_gpu_layers=0,
         verbose=False
