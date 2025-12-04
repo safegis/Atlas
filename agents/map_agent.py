@@ -180,8 +180,16 @@ Respond with tool calls in JSON format or a helpful message."""),
                 
                 location = location_part.strip()
                 
-                # Clean up common suffixes
-                location = location.replace("on the map", "").replace("in the map", "").replace("the", "").strip()
+                # Clean up common suffixes and prefixes
+                location = location.replace("on the map", "").replace("in the map", "").strip()
+                
+                # Remove leading "the" only if it's at the start
+                if location.startswith("the "):
+                    location = location[4:]
+                
+                # Keep location descriptors like "in paris" - they help geocoding accuracy
+                # Just clean up the query
+                location = location.strip()
                 
                 # Only add if we have a meaningful location (not empty and not a style/view keyword)
                 if location and len(location) > 2 and location not in ["map", "style", "view", "mode"]:
