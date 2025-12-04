@@ -155,6 +155,30 @@ Respond with tool calls in JSON format."""),
         if map_state is None:
             map_state = {}
         
+        # Check for location search keywords
+        location_keywords = ["show", "go to", "fly to", "fly the map to", "navigate to", "zoom to", "zoom the map to", "search for", "find", "locate"]
+        has_location_request = any(keyword in msg_lower for keyword in location_keywords)
+        
+        # If location request detected, extract the location query
+        if has_location_request:
+            # Try to extract location from common patterns
+            for keyword in location_keywords:
+                if keyword in msg_lower:
+                    # Split by the keyword and take the part after it
+                    parts = msg_lower.split(keyword, 1)
+                    if len(parts) > 1:
+                        location_part = parts[1].strip()
+                        # Remove common trailing phrases
+                        location_part = location_part.split(" in the map")[0].strip()
+                        location_part = location_part.split(" on the map")[0].strip()
+                        location_part = location_part.split(", then")[0].strip()
+                        location_part = location_part.split(" then")[0].strip()
+                        location_part = location_part.split(" and ")[0].strip()
+                        
+                        if location_part:
+                            actions.append({"tool": "search_location", "query": location_part, "requires_frontend": True})
+                            break
+        
         # Check for ambiguous style requests first
         if ("style" in msg_lower or "map" in msg_lower or "change" in msg_lower):
             # Check for ambiguous "dark" or "night" request - could be Dark or Navigation Night
