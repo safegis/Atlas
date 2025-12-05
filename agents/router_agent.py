@@ -1,34 +1,14 @@
 """Router agent for directing requests to specialized agents"""
 import json
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from state import AgentState
 
 
 class RouterAgent:
-    """Routes user requests to appropriate specialized agent"""
+    """Routes user requests to appropriate specialized agent using keyword-based logic"""
     
     def __init__(self, llm):
         self.llm = llm
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a routing agent for SafeGIS, a disaster management GIS platform.
-            
-Your job is to analyze user requests and route them to the appropriate specialized agent:
-
-1. **map_agent** - For location searches, navigation, map style changes, view mode switching
-   Examples: "show me Tokyo", "switch to satellite view", "change to 3D mode"
-
-2. **hazard_agent** - For earthquake/weather data, hazard monitoring, live data
-   Examples: "enable earthquake data", "show weather", "turn on seismic monitoring"
-
-3. **qa_agent** - For questions about GIS, disasters, explanations, general knowledge
-   Examples: "what is GIS?", "explain earthquakes", "how does mapping work?"
-
-4. **clarification_agent** - When the request is ambiguous or unclear
-   Examples: "make it darker" (which style?), "show hazards" (which type?)
-
-Analyze the user's message and respond with ONLY the agent name: map_agent, hazard_agent, qa_agent, or clarification_agent"""),
-            MessagesPlaceholder(variable_name="messages"),
-        ])
+        # Router uses rule-based logic, not LLM prompts
     
     def route(self, state: AgentState) -> str:
         """Determine which agent should handle the request"""
@@ -41,6 +21,32 @@ Analyze the user's message and respond with ONLY the agent name: map_agent, haza
         print(f"Router analyzing: {last_message}")
         print(f"Clarification needed: {state.get('clarification_needed')}")
         print(f"Pending action: {state.get('pending_action')}")
+        print(f"Web search enabled: {state.get('web_search_enabled', False)}")
+        
+        # Check if this is a Q&A question (not a control request)
+        qa_indicators = [
+            "what is", "what are", "what's", "explain", "how does", "tell me about",
+            "do you know", "are you familiar", "can you tell me", "have you heard",
+            "who is", "who are", "why is", "why are", "when is", "when are",
+            "describe", "define", "meaning of"
+        ]
+        
+        is_question = any(indicator in msg_lower for indicator in qa_indicators)
+        
+        # Check if web search is enabled - route to web search for Q&A questions
+        if state.get("web_search_enabled", False):
+            # Check if this is a Q&A type question (not map/hazard control)
+            hazard_control_keywords = ["enable", "disable", "turn on", "turn off", "monitoring"]
+            map_action_keywords = ["show", "find", "go to", "navigate", "zoom", "fly to", "take me to",
+                                  "change to", "switch to", "set to"]
+            
+            has_hazard_control = any(keyword in msg_lower for keyword in hazard_control_keywords)
+            has_map_action = any(keyword in msg_lower for keyword in map_action_keywords)
+            
+            # If it's a question OR not a control request, use web search
+            if is_question or (not has_hazard_control and not has_map_action):
+                print("Routing to: web_search_agent (web search enabled)")
+                return "web_search_agent"
         
         # Check if we're in a clarification flow
         if state.get("clarification_needed") or state.get("pending_action"):
@@ -100,23 +106,33 @@ Analyze the user's message and respond with ONLY the agent name: map_agent, haza
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
-        # Map Agent - Location, style, view
-        map_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
-                       "satellite", "dark", "light", "outdoors", "navigation", "style", "default",
-                       "2d", "3d", "view", "perspective", "map", "darker", "lighter"]
+        # Map Agent - Location, style, view (ACTION keywords only)
+        map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
+                              "change to", "switch to", "set to", "use", "apply",
+                              "zoom", "fly to", "take me to"]
         
         # Check for hazard keywords FIRST (higher priority than map)
         if any(keyword in msg_lower for keyword in hazard_keywords):
-            if not any(q in msg_lower for q in ["what is", "what are", "explain", "how does", "tell me about"]):
+            if not is_question:
                 print("Routing to: hazard_agent")
                 return "hazard_agent"
         
-        # Check for map keywords
-        if any(keyword in msg_lower for keyword in map_keywords):
-            # But not if it's asking "what is" (that's Q&A)
-            if not any(q in msg_lower for q in ["what is", "what are", "explain", "how does", "tell me about"]):
+        # Check for map ACTION keywords (not just mentions of map-related terms)
+        if any(keyword in msg_lower for keyword in map_action_keywords):
+            if not is_question:
                 print("Routing to: map_agent")
                 return "map_agent"
+        
+        # Check for specific map style/view change requests
+        style_keywords = ["satellite", "dark", "light", "outdoors", "navigation", "2d", "3d"]
+        change_keywords = ["change", "switch", "set", "use", "apply", "make it"]
+        
+        has_style = any(keyword in msg_lower for keyword in style_keywords)
+        has_change = any(keyword in msg_lower for keyword in change_keywords)
+        
+        if has_style and has_change and not is_question:
+            print("Routing to: map_agent")
+            return "map_agent"
         
         # Default to QA agent for questions
         print("Routing to: qa_agent")

@@ -13,3 +13,4 @@ class AgentState(TypedDict):
     user_intent: str
     clarification_needed: bool
     pending_action: dict | None
+    web_search_enabled: bool

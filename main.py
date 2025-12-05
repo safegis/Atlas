@@ -49,9 +49,16 @@ except Exception as e:
     print(f"Failed to load Gemma model: {e}")
     raise
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv('.env.local')
+
+# Exa.ai API key for web search
+EXA_API_KEY = os.getenv("EXA_API_KEY")
+
 # Create LangGraph agent system
 print("Creating LangGraph agent system...")
-agent_graph = create_agent_graph(llm)
+agent_graph = create_agent_graph(llm, exa_api_key=EXA_API_KEY)
 print("Agent system ready!")
 
 # ============================================================================
@@ -62,6 +69,7 @@ class ChatRequest(BaseModel):
     message: str
     conversation_history: Optional[List[dict]] = None
     map_state: Optional[dict] = None
+    web_search_enabled: Optional[bool] = False
 
 class ChatResponse(BaseModel):
     response: dict
@@ -121,7 +129,8 @@ async def chat(request: ChatRequest):
             agent_graph,
             request.message,
             request.conversation_history,
-            request.map_state
+            request.map_state,
+            request.web_search_enabled
         )
         
         # Format conversation history safely

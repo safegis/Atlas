@@ -1,6 +1,5 @@
 """Hazard agent for handling earthquake and weather data"""
 import json
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from state import AgentState
 from tools import control_earthquake_data, control_weather_data
@@ -12,16 +11,7 @@ class HazardAgent:
     def __init__(self, llm):
         self.llm = llm
         self.tools = [control_earthquake_data, control_weather_data]
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the Hazard Monitoring Agent for SafeGIS. You handle:
-- Earthquake data (Philippine PHIVOLCS or Global USGS)
-- Weather data (province or city level)
-
-Available tools: control_earthquake_data, control_weather_data, ask_clarification
-
-Respond with tool calls in JSON format."""),
-            MessagesPlaceholder(variable_name="messages"),
-        ])
+        # Hazard agent uses rule-based intent parsing, not LLM prompts
     
     def process(self, state: AgentState) -> AgentState:
         """Process hazard monitoring requests"""
@@ -131,10 +121,38 @@ Respond with tool calls in JSON format."""),
             return state
         
         if action and map_action:
-            # Compound request - return both actions
+            # Compound request - flatten and prioritize actions for best UX
             print(f"Detected compound request with map action: {map_action}")
+            
+            hazard_actions = []
+            map_actions_list = []
+            
+            # Collect hazard action(s)
+            if action.get("also_enable"):
+                # Dual source earthquake (both Philippine and Global)
+                hazard_actions.append(action)
+            else:
+                hazard_actions.append(action)
+            
+            # Collect map action(s) - flatten if nested
+            if map_action.get("multiple_actions"):
+                # Map action is already multiple actions - flatten them
+                map_actions_list = map_action["multiple_actions"]
+            else:
+                # Single map action
+                map_actions_list = [map_action]
+            
+            # Prioritize actions: view mode > style > hazards > location (location LAST to avoid interruption)
+            view_actions = [a for a in map_actions_list if a.get("tool") == "switch_view_mode"]
+            style_actions = [a for a in map_actions_list if a.get("tool") == "change_map_style"]
+            location_actions = [a for a in map_actions_list if a.get("tool") == "search_location"]
+            other_map_actions = [a for a in map_actions_list if a.get("tool") not in ["switch_view_mode", "change_map_style", "search_location"]]
+            
+            # Final order: view > style > other map > hazards > location
+            all_actions = view_actions + style_actions + other_map_actions + hazard_actions + location_actions
+            
             state["messages"].append(AIMessage(content=json.dumps({
-                "multiple_actions": [action, map_action],
+                "multiple_actions": all_actions,
                 "requires_frontend": True
             })))
         elif action:
@@ -264,10 +282,12 @@ Respond with tool calls in JSON format."""),
             # If they explicitly mention global/usgs or philippine/phivolcs, it's not ambiguous
             has_global = "global" in msg_lower or "usgs" in msg_lower or "worldwide" in msg_lower or "world" in msg_lower
             has_philippine = "philippine" in msg_lower or "philippines" in msg_lower or "phivolcs" in msg_lower or "local" in msg_lower
+            has_both = "both" in msg_lower or "all" in msg_lower
             
-            # If neither mentioned, ask for clarification (if both mentioned, it's clear - enable/disable both)
+            # If neither mentioned AND not "both", ask for clarification
+            # If "both" is mentioned, it's clear - enable/disable both (not ambiguous)
             # Only ask for clarification on enable requests - for disable, we can disable all
-            if not has_global and not has_philippine and not is_disable:
+            if not has_global and not has_philippine and not has_both and not is_disable:
                 return {
                     "type": "clarification",
                     "question": "I found 2 earthquake data sources. Which one would you like to see?",
@@ -298,88 +318,93 @@ Respond with tool calls in JSON format."""),
         return None
     
     def _parse_intent(self, message: str) -> dict | None:
-        """Parse hazard monitoring intents"""
-        msg_lower = message.lower()
+        """Parse hazard monitoring intents using LLM for natural language understanding"""
         
-        # Determine action - check for enable keywords (including "see", "view", "display")
-        enable_keywords = ["enable", "show", "see", "view", "display", "turn on", "activate", "want to see", "also"]
-        disable_keywords = ["disable", "hide", "turn off", "deactivate", "remove"]
-        
-        # Check disable first (more specific), then enable, default to enable for viewing requests
-        if any(word in msg_lower for word in disable_keywords):
-            action = "disable"
-        elif any(word in msg_lower for word in enable_keywords):
-            action = "enable"
-        else:
-            action = "enable"  # Default to enable for hazard viewing
-        
-        # Check for location-specific requests (Philippines/Global) even without "earthquake" keyword
-        # This handles follow-up requests like "also enable the Philippines"
-        has_global = "global" in msg_lower or "usgs" in msg_lower
-        has_philippine = "philippine" in msg_lower or "philippines" in msg_lower or "phivolcs" in msg_lower
-        
-        # If location is mentioned with an action word, assume earthquake context
-        if (has_global or has_philippine) and any(word in msg_lower for word in enable_keywords + disable_keywords):
-            # If both mentioned, enable both
-            if has_global and has_philippine:
-                return {
-                    "tool": "control_earthquake_data",
-                    "action": action,
-                    "source": "philippine",
-                    "requires_frontend": True,
-                    "also_enable": {"tool": "control_earthquake_data", "action": action, "source": "global"}
-                }
+        system_prompt = """You are a hazard monitoring intent parser. Extract the user's intent from their message.
+
+Available hazard actions:
+1. **control_earthquake_data** - Enable/disable earthquake monitoring
+   - action: "enable" or "disable"
+   - source: "philippine" (PHIVOLCS), "global" (USGS), or "both"
+   - Examples: "show earthquakes" → enable, "Philippine earthquakes" → philippine
+
+2. **control_weather_data** - Enable/disable weather monitoring
+   - action: "enable" or "disable"
+   - scope: "province" (Philippines-wide), "city" (specific), or "all"
+   - province: (if scope=city) "Abra", "Agusan del Norte", "Agusan del Sur", "Aklan"
+   - Examples: "show weather" → province, "weather in Abra" → city + Abra
+
+Default to "enable" if action is unclear (e.g., "show", "display").
+
+Respond with JSON object: {"tool": "...", "action": "...", "source/scope": "...", "province": "..."}
+
+Examples:
+- "enable earthquake data" → {"tool": "control_earthquake_data", "action": "enable", "source": "philippine"}
+- "show global earthquakes" → {"tool": "control_earthquake_data", "action": "enable", "source": "global"}
+- "disable all earthquakes" → {"tool": "control_earthquake_data", "action": "disable", "source": "both"}
+- "show weather" → {"tool": "control_weather_data", "action": "enable", "scope": "province"}
+- "weather in Aklan" → {"tool": "control_weather_data", "action": "enable", "scope": "city", "province": "Aklan"}
+
+Return ONLY the JSON object, no explanation."""
+
+        try:
+            # Use LLM to parse intent
+            response = self.llm.invoke(message, system_prompt=system_prompt)
+            print(f"LLM parsed hazard intent: {response[:200]}")
             
-            # Otherwise, determine which one
-            source = "global" if has_global else "philippine"
-            return {"tool": "control_earthquake_data", "action": action, "source": source, "requires_frontend": True}
-        
-        # Earthquake - explicit mention
-        if any(word in msg_lower for word in ["earthquake", "seismic", "quake"]):
-            # If both mentioned, enable/disable both
-            if has_global and has_philippine:
-                return {
-                    "tool": "control_earthquake_data",
-                    "action": action,
-                    "source": "philippine",
-                    "requires_frontend": True,
-                    "also_enable": {"tool": "control_earthquake_data", "action": action, "source": "global"}
-                }
+            # Clean response
+            response = response.strip()
+            if response.startswith("```json"):
+                response = response.split("```json")[1].split("```")[0].strip()
+            elif response.startswith("```"):
+                response = response.split("```")[1].split("```")[0].strip()
             
-            # If disabling without specifying source, disable both
-            if action == "disable" and not has_global and not has_philippine:
-                return {
-                    "tool": "control_earthquake_data",
-                    "action": "disable",
-                    "source": "philippine",
-                    "requires_frontend": True,
-                    "also_enable": {"tool": "control_earthquake_data", "action": "disable", "source": "global"}
-                }
+            # Parse JSON
+            parsed = json.loads(response)
             
-            # Otherwise, determine which one
-            source = "global" if has_global else "philippine"
-            return {"tool": "control_earthquake_data", "action": action, "source": source, "requires_frontend": True}
-        
-        # Weather
-        if any(word in msg_lower for word in ["weather", "temperature", "climate"]):
-            # Check for specific province names (check these first, even without "city" keyword)
-            if "abra" in msg_lower:
-                return {"tool": "control_weather_data", "action": action, "scope": "city", "province": "Abra", "requires_frontend": True}
-            elif "agusan del norte" in msg_lower:
-                return {"tool": "control_weather_data", "action": action, "scope": "city", "province": "Agusan del Norte", "requires_frontend": True}
-            elif "agusan del sur" in msg_lower:
-                return {"tool": "control_weather_data", "action": action, "scope": "city", "province": "Agusan del Sur", "requires_frontend": True}
-            elif "aklan" in msg_lower:
-                return {"tool": "control_weather_data", "action": action, "scope": "city", "province": "Aklan", "requires_frontend": True}
-            elif "all" in msg_lower:
-                return {"tool": "control_weather_data", "action": action, "scope": "all", "requires_frontend": True}
-            elif "city" in msg_lower or "municipality" in msg_lower:
-                # Generic city request - default to all cities
-                return {"tool": "control_weather_data", "action": action, "scope": "all_cities", "requires_frontend": True}
-            else:
-                # Province level (Philippines-wide)
+            # Convert to internal format
+            tool = parsed.get("tool")
+            action = parsed.get("action", "enable")
+            
+            if tool == "control_earthquake_data":
+                source = parsed.get("source", "philippine")
+                
+                if source == "both":
+                    return {
+                        "tool": "control_earthquake_data",
+                        "action": action,
+                        "source": "philippine",
+                        "requires_frontend": True,
+                        "also_enable": {"tool": "control_earthquake_data", "action": action, "source": "global"}
+                    }
+                else:
+                    return {"tool": "control_earthquake_data", "action": action, "source": source, "requires_frontend": True}
+            
+            elif tool == "control_weather_data":
+                scope = parsed.get("scope", "province")
+                province = parsed.get("province")
+                
+                result = {"tool": "control_weather_data", "action": action, "scope": scope, "requires_frontend": True}
+                if province:
+                    result["province"] = province
+                return result
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error parsing hazard intent with LLM: {e}")
+            # Fallback to simple keyword matching
+            msg_lower = message.lower()
+            
+            if "earthquake" in msg_lower or "seismic" in msg_lower:
+                action = "disable" if "disable" in msg_lower or "hide" in msg_lower else "enable"
+                source = "global" if "global" in msg_lower or "usgs" in msg_lower else "philippine"
+                return {"tool": "control_earthquake_data", "action": action, "source": source, "requires_frontend": True}
+            
+            if "weather" in msg_lower:
+                action = "disable" if "disable" in msg_lower or "hide" in msg_lower else "enable"
                 return {"tool": "control_weather_data", "action": action, "scope": "province", "requires_frontend": True}
-        
-        return None
+            
+            return None
 
 

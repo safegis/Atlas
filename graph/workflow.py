@@ -4,11 +4,12 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
 from state import AgentState
-from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent
+from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent
 from utils import LlamaCppWrapper
+import os
 
 
-def create_agent_graph(llm):
+def create_agent_graph(llm, exa_api_key: str = None):
     """Create the LangGraph multi-agent system"""
     
     # Wrap Llama for LangChain compatibility
@@ -21,6 +22,11 @@ def create_agent_graph(llm):
     qa_agent = QAAgent(wrapped_llm)
     clarification_agent = ClarificationAgent()
     
+    # Initialize web search agent if API key provided
+    web_search_agent = None
+    if exa_api_key:
+        web_search_agent = WebSearchAgent(wrapped_llm, exa_api_key)
+    
     # Define the graph
     workflow = StateGraph(AgentState)
     
@@ -31,6 +37,10 @@ def create_agent_graph(llm):
     workflow.add_node("qa_agent", qa_agent.process)
     workflow.add_node("clarification_agent", clarification_agent.process)
     
+    # Add web search node if available
+    if web_search_agent:
+        workflow.add_node("web_search_agent", web_search_agent.process)
+    
     # Define routing logic
     def route_to_agent(state: AgentState) -> str:
         """Route to the appropriate agent based on router decision"""
@@ -40,15 +50,21 @@ def create_agent_graph(llm):
     workflow.set_entry_point("router")
     
     # Add conditional edges from router
+    routing_map = {
+        "map_agent": "map_agent",
+        "hazard_agent": "hazard_agent",
+        "qa_agent": "qa_agent",
+        "clarification_agent": "clarification_agent"
+    }
+    
+    # Add web search routing if available
+    if web_search_agent:
+        routing_map["web_search_agent"] = "web_search_agent"
+    
     workflow.add_conditional_edges(
         "router",
         route_to_agent,
-        {
-            "map_agent": "map_agent",
-            "hazard_agent": "hazard_agent",
-            "qa_agent": "qa_agent",
-            "clarification_agent": "clarification_agent"
-        }
+        routing_map
     )
     
     # All agents end after processing
@@ -57,10 +73,14 @@ def create_agent_graph(llm):
     workflow.add_edge("qa_agent", END)
     workflow.add_edge("clarification_agent", END)
     
+    # Add web search edge if available
+    if web_search_agent:
+        workflow.add_edge("web_search_agent", END)
+    
     return workflow.compile()
 
 
-def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None) -> dict:
+def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False) -> dict:
     """
     Process a user message through the agent graph
     
@@ -79,12 +99,16 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         # Initialize state - LIMIT conversation history to prevent context overflow
         messages = conversation_history or []
         
-        # Keep only last 10 messages to prevent context window overflow
-        if len(messages) > 10:
-            print(f"Trimming conversation history from {len(messages)} to 10 messages")
-            messages = messages[-10:]
+        # Keep only last 8 messages to prevent context window overflow
+        # With n_ctx=4096, system_prompt=~200, max_tokens=2048, we need ~1800 tokens for history+input
+        if len(messages) > 8:
+            print(f"Trimming conversation history from {len(messages)} to 8 messages")
+            messages = messages[-8:]
         
         messages.append(HumanMessage(content=message))
+        
+        # Store web search flag in state
+        web_search_flag = web_search_enabled
         
         # Check if there's a pending action from the last AI message
         pending_action = None
@@ -145,7 +169,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
             "map_state": map_state or {},
             "user_intent": "",
             "clarification_needed": clarification_needed,
-            "pending_action": pending_action
+            "pending_action": pending_action,
+            "web_search_enabled": web_search_flag
         }
         
         print(f"Initial state created with {len(messages)} messages")

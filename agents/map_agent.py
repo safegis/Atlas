@@ -1,6 +1,5 @@
 """Map agent for handling location, style, and view mode"""
 import json
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 from state import AgentState
 from tools import search_location, change_map_style, switch_view_mode
@@ -12,19 +11,7 @@ class MapAgent:
     def __init__(self, llm):
         self.llm = llm
         self.tools = [search_location, change_map_style, switch_view_mode]
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the Map Agent for SafeGIS. You handle:
-- Location searches and navigation
-- Map style changes (default, satellite, outdoors, light, dark, navigation_day, navigation_night)
-- View mode switching (2D/3D)
-
-When the user's request is ambiguous (e.g., "make it darker"), use the ask_clarification tool.
-
-Available tools: search_location, change_map_style, switch_view_mode, ask_clarification
-
-Respond with tool calls in JSON format or a helpful message."""),
-            MessagesPlaceholder(variable_name="messages"),
-        ])
+        # Map agent uses rule-based intent parsing, not LLM prompts
     
     def process(self, state: AgentState) -> AgentState:
         """Process map-related requests"""
@@ -157,99 +144,99 @@ Respond with tool calls in JSON format or a helpful message."""),
         return None
     
     def _parse_intent(self, message: str, map_state: dict) -> dict | None:
-        """Parse clear map intents - can return multiple actions"""
-        msg_lower = message.lower()
-        actions = []
+        """Parse map intents using LLM for natural language understanding"""
         
-        # Location search - extract location name
-        location_keywords = ["show me", "show", "find", "go to", "navigate to", "search for", "where is", "locate", "take me to", "fly to", "fly the map to", "fly"]
-        
-        for keyword in location_keywords:
-            if keyword in msg_lower:
-                # Extract location by finding text after the keyword and before style/view keywords
-                location_part = msg_lower.split(keyword, 1)[1] if keyword in msg_lower else ""
-                
-                # Stop at common separators (commas, "and", "then", style/view keywords)
-                separators = [",", " and ", " then ", " change ", " switch ", " satellite", " outdoors", " light", " dark", 
-                             " 2d", " 3d", " style", " mode", " view", " orientation"]
-                
-                for sep in separators:
-                    if sep in location_part:
-                        location_part = location_part.split(sep)[0]
-                        break
-                
-                location = location_part.strip()
-                
-                # Clean up common suffixes and prefixes
-                location = location.replace("on the map", "").replace("in the map", "").strip()
-                
-                # Remove leading "the" only if it's at the start
-                if location.startswith("the "):
-                    location = location[4:]
-                
-                # Keep location descriptors like "in paris" - they help geocoding accuracy
-                # Just clean up the query
-                location = location.strip()
-                
-                # Only add if we have a meaningful location (not empty and not a style/view keyword)
-                if location and len(location) > 2 and location not in ["map", "style", "view", "mode"]:
-                    actions.append({"tool": "search_location", "query": location, "requires_frontend": True})
-                    break  # Only extract one location
-        
-        # Map style
-        style_map = {
-            "satellite": "satellite",
-            "outdoors": "outdoors",
-            "light": "light",
-            "dark": "dark",
-            "default": "default",
-            "navigation day": "navigation_day",
-            "navigation night": "navigation_night"
-        }
-        
-        for style_name, style_value in style_map.items():
-            if style_name in msg_lower:
-                actions.append({"tool": "change_map_style", "style": style_value, "requires_frontend": True})
-                break  # Only one style at a time
-        
-        # View mode
-        if "3d" in msg_lower or "three dimensional" in msg_lower:
-            # Check if current style doesn't support 3D
-            current_style = map_state.get("currentMapStyle", "")
-            print(f"Checking 3D compatibility - Current style: '{current_style}'")
-            non_3d_styles = ["Dark", "Light", "Outdoors", "Navigation"]
+        system_prompt = """You are a map control intent parser. Extract the user's intent from their message.
+
+Available map actions:
+1. **search_location** - Navigate to a location
+   - Extract: location name/query
+   - Examples: "show me Paris", "zoom to Tokyo", "fly to Eiffel Tower"
+
+2. **change_map_style** - Change visual style
+   - Options: satellite, outdoors, light, dark, default, navigation_day, navigation_night
+   - Examples: "change to satellite", "make it darker" → dark
+
+3. **switch_view_mode** - Change 2D/3D view
+   - Options: 2d, 3d
+   - Examples: "switch to 3D", "change orientation to 3D"
+
+Respond with JSON array of actions. Each action has: {"tool": "...", "param": "value"}
+
+Examples:
+- "zoom to Paris" → [{"tool": "search_location", "query": "Paris"}]
+- "show Tokyo in satellite view" → [{"tool": "search_location", "query": "Tokyo"}, {"tool": "change_map_style", "style": "satellite"}]
+- "switch to 3D" → [{"tool": "switch_view_mode", "mode": "3d"}]
+- "make it darker" → [{"tool": "change_map_style", "style": "dark"}]
+
+Return ONLY the JSON array, no explanation."""
+
+        try:
+            # Use LLM to parse intent
+            response = self.llm.invoke(message, system_prompt=system_prompt)
+            print(f"LLM parsed intent: {response[:200]}")
             
-            if any(style in current_style for style in non_3d_styles):
-                # Need to change style to default first, then switch to 3D
-                info_msg = f"Note: {current_style} doesn't support 3D terrain. Switching to Default style."
-                print(f"Style conflict detected, adding style change action")
-                
-                # Add style change action first
-                actions.append({"tool": "change_map_style", "style": "default", "requires_frontend": True})
-                # Then add view mode change with info message
-                actions.append({"tool": "switch_view_mode", "mode": "3d", "requires_frontend": True, "info_message": info_msg})
-            else:
-                print(f"Style '{current_style}' supports 3D, no style change needed")
-                actions.append({"tool": "switch_view_mode", "mode": "3d", "requires_frontend": True})
-        elif "2d" in msg_lower or "two dimensional" in msg_lower or "flat" in msg_lower:
-            actions.append({"tool": "switch_view_mode", "mode": "2d", "requires_frontend": True})
-        
-        # Return multiple actions if found
-        if len(actions) > 1:
-            # Prioritize actions in this order for best UX:
-            # 1. View mode changes (2D/3D) - affects rendering
-            # 2. Style changes - visual appearance
-            # 3. Location searches - camera movement (should be last to not be interrupted)
-            view_actions = [a for a in actions if a.get("tool") == "switch_view_mode"]
-            style_actions = [a for a in actions if a.get("tool") == "change_map_style"]
-            location_actions = [a for a in actions if a.get("tool") == "search_location"]
-            other_actions = [a for a in actions if a.get("tool") not in ["switch_view_mode", "change_map_style", "search_location"]]
+            # Clean response - extract JSON if wrapped in markdown
+            response = response.strip()
+            if response.startswith("```json"):
+                response = response.split("```json")[1].split("```")[0].strip()
+            elif response.startswith("```"):
+                response = response.split("```")[1].split("```")[0].strip()
             
-            sorted_actions = view_actions + style_actions + other_actions + location_actions
-            return {"multiple_actions": sorted_actions, "requires_frontend": True}
-        elif len(actions) == 1:
-            return actions[0]
-        
-        return None
+            # Parse JSON
+            parsed_actions = json.loads(response)
+            
+            if not isinstance(parsed_actions, list):
+                parsed_actions = [parsed_actions]
+            
+            # Convert to internal format and add requires_frontend
+            actions = []
+            for action in parsed_actions:
+                tool = action.get("tool")
+                if tool == "search_location":
+                    actions.append({"tool": "search_location", "query": action.get("query", ""), "requires_frontend": True})
+                elif tool == "change_map_style":
+                    actions.append({"tool": "change_map_style", "style": action.get("style", ""), "requires_frontend": True})
+                elif tool == "switch_view_mode":
+                    mode = action.get("mode", "")
+                    # Check 3D compatibility
+                    if mode == "3d":
+                        current_style = map_state.get("currentMapStyle", "")
+                        non_3d_styles = ["Dark", "Light", "Outdoors", "Navigation"]
+                        
+                        if any(style in current_style for style in non_3d_styles):
+                            info_msg = f"Note: {current_style} doesn't support 3D terrain. Switching to Default style."
+                            actions.append({"tool": "change_map_style", "style": "default", "requires_frontend": True})
+                            actions.append({"tool": "switch_view_mode", "mode": "3d", "requires_frontend": True, "info_message": info_msg})
+                        else:
+                            actions.append({"tool": "switch_view_mode", "mode": mode, "requires_frontend": True})
+                    else:
+                        actions.append({"tool": "switch_view_mode", "mode": mode, "requires_frontend": True})
+            
+            # Prioritize actions for best UX
+            if len(actions) > 1:
+                view_actions = [a for a in actions if a.get("tool") == "switch_view_mode"]
+                style_actions = [a for a in actions if a.get("tool") == "change_map_style"]
+                location_actions = [a for a in actions if a.get("tool") == "search_location"]
+                other_actions = [a for a in actions if a.get("tool") not in ["switch_view_mode", "change_map_style", "search_location"]]
+                
+                sorted_actions = view_actions + style_actions + other_actions + location_actions
+                return {"multiple_actions": sorted_actions, "requires_frontend": True}
+            elif len(actions) == 1:
+                return actions[0]
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error parsing intent with LLM: {e}")
+            # Fallback to simple keyword matching for critical failures
+            msg_lower = message.lower()
+            if any(word in msg_lower for word in ["show", "zoom", "fly", "navigate", "find"]):
+                # Try to extract location after common keywords
+                for keyword in ["show", "zoom to", "fly to", "navigate to"]:
+                    if keyword in msg_lower:
+                        location = msg_lower.split(keyword, 1)[1].strip().split()[0:3]
+                        return {"tool": "search_location", "query": " ".join(location), "requires_frontend": True}
+            return None
 
 
