@@ -57,8 +57,8 @@ class RouterAgent:
                 
                 # Route based on the tool in the pending action
                 if tool == "run_exposure_analysis" or tool == "control_exposure_assessment":
-                    print("Routing to: exposure_agent (has pending exposure action)")
-                    return "exposure_agent"
+                    print("Routing to: exposure_assessment_agent (has pending exposure action)")
+                    return "exposure_assessment_agent"
             
             # Default to clarification agent for other pending actions
             print("Routing to: clarification_agent (has pending action)")
@@ -109,10 +109,10 @@ class RouterAgent:
                                 
                                 # Route based on the tool in the pending action
                                 if tool == "run_exposure_analysis" or tool == "control_exposure_assessment":
-                                    print("✓ Routing to: exposure_agent (follow-up to exposure clarification)")
+                                    print("✓ Routing to: exposure_assessment_agent (follow-up to exposure clarification)")
                                     state["pending_action"] = prev_content
                                     state["clarification_needed"] = True
-                                    return "exposure_agent"
+                                    return "exposure_assessment_agent"
                                 else:
                                     print("✓ Routing to: clarification_agent (follow-up to clarification)")
                                     print(f"Setting pending action: {suggested_action}")
@@ -142,8 +142,8 @@ class RouterAgent:
         # Check for exposure keywords FIRST (highest priority for assessment)
         if any(keyword in msg_lower for keyword in exposure_keywords):
             if not is_question:
-                print("Routing to: exposure_agent")
-                return "exposure_agent"
+                print("Routing to: exposure_assessment_agent")
+                return "exposure_assessment_agent"
         
         # Check for hazard keywords (higher priority than map)
         if any(keyword in msg_lower for keyword in hazard_keywords):

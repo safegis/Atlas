@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage
 from state import AgentState
 
 
-class ExposureAgent:
+class ExposureAssessmentAgent:
     """Handles exposure assessment control requests"""
     
     def __init__(self, llm):
@@ -16,7 +16,7 @@ class ExposureAgent:
         last_message = messages[-1].content
         uploaded_files = state.get("uploaded_files", [])
         
-        print(f"Exposure Agent processing: {last_message}")
+        print(f"Exposure Assessment Agent processing: {last_message}")
         print(f"Available uploaded files: {uploaded_files}")
         
         # Check if this is a response to a previous clarification
