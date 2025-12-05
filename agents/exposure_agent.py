@@ -1,0 +1,596 @@
+"""Exposure assessment agent for controlling exposure analysis"""
+import json
+from langchain_core.messages import AIMessage
+from state import AgentState
+
+
+class ExposureAgent:
+    """Handles exposure assessment control requests"""
+    
+    def __init__(self, llm):
+        self.llm = llm
+    
+    def process(self, state: AgentState) -> AgentState:
+        """Process exposure assessment requests using LLM-based intent parsing"""
+        messages = state["messages"]
+        last_message = messages[-1].content
+        uploaded_files = state.get("uploaded_files", [])
+        
+        print(f"Exposure Agent processing: {last_message}")
+        print(f"Available uploaded files: {uploaded_files}")
+        
+        # Check if this is a response to a previous clarification
+        pending_action = state.get("pending_action")
+        if pending_action and pending_action.get("suggested_action", {}).get("tool") == "run_exposure_analysis":
+            print("Processing clarification response for exposure assessment")
+            suggested = pending_action.get("suggested_action", {})
+            awaiting = suggested.get("awaiting")
+            
+            # Parse user's selection (e.g., "1", "2", "1 and 3", etc.)
+            try:
+                # Extract numbers from response
+                import re
+                numbers = re.findall(r'\d+', last_message.lower())
+                
+                if awaiting == "hazard_source_selection":
+                    # User is choosing between existing or imported hazard data
+                    if not numbers:
+                        response_data = {
+                            "text": "Please select an option by number:\n1. Use existing data\n2. Use imported data"
+                        }
+                        json_response = json.dumps(response_data)
+                        return {"messages": state["messages"] + [AIMessage(content=json_response)]}
+                    
+                    choice = int(numbers[0])
+                    if choice == 1:
+                        # User chose existing data for hazard
+                        response_data = {
+                            "type": "clarification",
+                            "question": "✅ **Hazard data source selected: Existing data**\n\nNow, which **exposure elements** would you like to use?",
+                            "options": [
+                                "1. Use existing data (from the system)",
+                                "2. Use imported data (files you've uploaded)"
+                            ],
+                            "suggested_action": {
+                                "tool": "run_exposure_analysis",
+                                "action": "run",
+                                "hazard_source": "existing",
+                                "awaiting": "element_source_selection"
+                            }
+                        }
+                    elif choice == 2:
+                        # User chose imported data for hazard
+                        if not uploaded_files:
+                            response_data = {
+                                "text": "❌ No uploaded files detected. Please upload hazard data files first."
+                            }
+                        else:
+                            response_data = {
+                                "type": "clarification",
+                                "question": "Perfect! Please select which uploaded file(s) to use as **hazard data**:",
+                                "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                                "suggested_action": {
+                                    "tool": "run_exposure_analysis",
+                                    "action": "run",
+                                    "hazard_source": "imported",
+                                    "awaiting": "hazard_selection_step"
+                                }
+                            }
+                    else:
+                        response_data = {
+                            "text": "Please select either 1 or 2."
+                        }
+                    
+                    json_response = json.dumps(response_data)
+                    return {"messages": state["messages"] + [AIMessage(content=json_response)]}
+                
+                elif awaiting == "element_source_selection":
+                    # User is choosing between existing or imported element data
+                    if not numbers:
+                        response_data = {
+                            "text": "Please select an option by number:\n1. Use existing data\n2. Use imported data"
+                        }
+                        json_response = json.dumps(response_data)
+                        return {"messages": state["messages"] + [AIMessage(content=json_response)]}
+                    
+                    choice = int(numbers[0])
+                    hazard_source = suggested.get("hazard_source", "existing")
+                    hazard_data = suggested.get("hazard_data", [])
+                    
+                    if choice == 1:
+                        # User chose existing data for elements
+                        response_data = {
+                            "text": "Excellent! Now, which **existing exposure elements** would you like to analyze?\n\nAvailable options:\n• Land Cover\n• Transportation Networks (Roads)\n• Point Features (Buildings, facilities)\n\nYou can say something like:\n• \"Use land cover\"\n• \"Analyze roads and buildings\"\n• \"Use all available elements\""
+                        }
+                    elif choice == 2:
+                        # User chose imported data for elements
+                        if not uploaded_files:
+                            response_data = {
+                                "text": "❌ No uploaded files detected. Please upload exposure element files first."
+                            }
+                        else:
+                            response_data = {
+                                "type": "clarification",
+                                "question": "Perfect! Please select which uploaded file(s) to use as **exposure elements**:",
+                                "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                                "suggested_action": {
+                                    "tool": "run_exposure_analysis",
+                                    "action": "run",
+                                    "hazard_source": hazard_source,
+                                    "hazard_data": hazard_data,
+                                    "element_source": "imported",
+                                    "awaiting": "element_selection"
+                                }
+                            }
+                    else:
+                        response_data = {
+                            "text": "Please select either 1 or 2."
+                        }
+                    
+                    json_response = json.dumps(response_data)
+                    new_messages = state["messages"] + [AIMessage(content=json_response)]
+                    print(f"DEBUG: element_source_selection - appended message, total messages: {len(new_messages)}")
+                    return {"messages": new_messages}
+                
+                selected_indices = [int(n) - 1 for n in numbers]  # Convert to 0-based index
+                
+                if not selected_indices:
+                    # No valid selection, ask again
+                    response_data = {
+                        "text": "Please select a file by number (e.g., '1' or '2') or say 'cancel' to stop."
+                    }
+                    json_response = json.dumps(response_data)
+                    return {"messages": state["messages"] + [AIMessage(content=json_response)]}
+                
+                # Get selected file names
+                selected_files = [uploaded_files[i] for i in selected_indices if i < len(uploaded_files)]
+                
+                if not selected_files:
+                    # Invalid selection
+                    response_data = {
+                        "text": f"Invalid selection. Please select a number between 1 and {len(uploaded_files)}."
+                    }
+                    json_response = json.dumps(response_data)
+                    state["messages"].append(AIMessage(content=json_response))
+                    return state
+                
+                if awaiting == "hazard_selection_step":
+                    # User selected hazard files in step-by-step mode, now ask for element source
+                    response_data = {
+                        "type": "clarification",
+                        "question": f"✅ **Hazard file selected:** {', '.join(selected_files)}\n\nNow, which **exposure elements** would you like to use?",
+                        "options": [
+                            "1. Use existing data (from the system)",
+                            "2. Use imported data (files you've uploaded)"
+                        ],
+                        "suggested_action": {
+                            "tool": "run_exposure_analysis",
+                            "action": "run",
+                            "hazard_source": "imported",
+                            "hazard_data": selected_files,
+                            "awaiting": "element_source_selection"
+                        }
+                    }
+                    json_response = json.dumps(response_data)
+                    state["messages"].append(AIMessage(content=json_response))
+                    return state
+                
+                elif awaiting == "hazard_selection":
+                    # User selected hazard files, now check if we need element selection
+                    if suggested.get("element_source") == "imported":
+                        # Need to ask for element selection next
+                        response_data = {
+                            "type": "clarification",
+                            "question": "Great! Now please select which uploaded file(s) to use as **exposure elements**:",
+                            "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                            "suggested_action": {
+                                "tool": "run_exposure_analysis",
+                                "action": "run",
+                                "hazard_source": "imported",
+                                "hazard_data": selected_files,
+                                "element_source": "imported",
+                                "awaiting": "element_selection"
+                            }
+                        }
+                    else:
+                        # Check if element data is specified
+                        element_source = suggested.get("element_source", "existing")
+                        element_data = suggested.get("element_data", [])
+                        
+                        if element_source == "existing" and len(element_data) == 0:
+                            # Need to ask user which existing elements to use
+                            response_data = {
+                                "type": "clarification",
+                                "question": "✅ **Hazard data selected!**\n\nNow, which **exposure elements** would you like to analyze?\n\nAvailable options:\n• Land Cover\n• Transportation Networks (Roads)\n• Point Features (Buildings, facilities)\n\nYou can say something like:\n• \"Use land cover\"\n• \"Analyze roads and buildings\"\n• \"Use all available elements\"",
+                                "suggested_action": {
+                                    "tool": "run_exposure_analysis",
+                                    "action": "run",
+                                    "hazard_source": "imported",
+                                    "hazard_data": selected_files,
+                                    "element_source": "existing",
+                                    "awaiting": "element_data_selection"
+                                }
+                            }
+                        else:
+                            # Ask for confirmation before running
+                            hazard_display = ", ".join(selected_files)
+                            element_display = ", ".join(element_data) if element_data else "existing data"
+                            
+                            response_data = {
+                                "type": "clarification",
+                                "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?",
+                                "options": [
+                                    "1. Yes, run the analysis",
+                                    "2. No, cancel"
+                                ],
+                                "suggested_action": {
+                                    "tool": "run_exposure_analysis",
+                                    "action": "run",
+                                    "hazard_source": "imported",
+                                    "hazard_data": selected_files,
+                                    "element_source": element_source,
+                                    "element_data": element_data,
+                                    "awaiting": "confirm_analysis"
+                                }
+                            }
+                elif awaiting == "element_selection":
+                    # User selected element files, ask for confirmation before running
+                    print(f"DEBUG: element_selection case - selected_files: {selected_files}")
+                    print(f"DEBUG: hazard_source: {suggested.get('hazard_source')}, hazard_data: {suggested.get('hazard_data')}")
+                    response_data = {
+                        "type": "clarification",
+                        "question": "✅ **All data selected!**\n\n**Hazard:** " + ", ".join(suggested.get("hazard_data", [])) + "\n**Elements:** " + ", ".join(selected_files) + "\n\nReady to run the exposure analysis?",
+                        "options": [
+                            "1. Yes, run the analysis",
+                            "2. No, cancel"
+                        ],
+                        "suggested_action": {
+                            "tool": "run_exposure_analysis",
+                            "action": "run",
+                            "hazard_source": suggested.get("hazard_source", "existing"),
+                            "hazard_data": suggested.get("hazard_data", []),
+                            "element_source": "imported",
+                            "element_data": selected_files,
+                            "awaiting": "confirm_analysis"
+                        }
+                    }
+                    print(f"DEBUG: response_data set for confirmation: {response_data}")
+                elif awaiting == "confirm_analysis":
+                    # User is confirming whether to run the analysis
+                    if not numbers:
+                        response_data = {
+                            "text": "Please select an option:\n1. Yes, run the analysis\n2. No, cancel"
+                        }
+                        json_response = json.dumps(response_data)
+                        state["messages"].append(AIMessage(content=json_response))
+                        return state
+                    
+                    choice = int(numbers[0])
+                    if choice == 1:
+                        # User confirmed, run analysis
+                        response_data = {
+                            "tool": "run_exposure_analysis",
+                            "action": "run",
+                            "hazard_source": suggested.get("hazard_source", "existing"),
+                            "hazard_data": suggested.get("hazard_data", []),
+                            "element_source": suggested.get("element_source", "existing"),
+                            "element_data": suggested.get("element_data", []),
+                            "requires_frontend": True,
+                            "message": "🔄 **Starting exposure analysis...**\n\nThis may take a while depending on the size of your data. Please wait for the analysis to complete."
+                        }
+                    else:
+                        # User cancelled
+                        response_data = {
+                            "text": "Analysis cancelled. You can start over by saying 'Do exposure assessment' or specify your data directly."
+                        }
+                    
+                    json_response = json.dumps(response_data)
+                    # Clear pending action after processing
+                    return {"messages": state["messages"] + [AIMessage(content=json_response)], "pending_action": None}
+                
+                elif awaiting == "element_data_selection":
+                    # User specified which existing elements to use (e.g., "Use land cover")
+                    # Parse the user's response using LLM
+                    element_prompt = f"""Parse this exposure element selection request.
+
+User request: {last_message}
+
+Extract which elements the user wants to analyze. Available options:
+- Land Cover
+- Transportation Networks (Roads)
+- Point Features (Buildings, facilities)
+
+Respond with a JSON array of element names. Examples:
+- "Use land cover" → ["Land Cover"]
+- "Analyze roads and buildings" → ["Transportation Networks", "Point Features"]
+- "Use all" → ["Land Cover", "Transportation Networks", "Point Features"]
+
+Respond ONLY with valid JSON array: ["element1", "element2"]
+"""
+                    try:
+                        llm_response = self.llm.invoke(element_prompt, system_prompt="You are a JSON parser. Respond only with a JSON array.")
+                        cleaned = llm_response.strip()
+                        if cleaned.startswith("```json"):
+                            cleaned = cleaned[7:]
+                        if cleaned.startswith("```"):
+                            cleaned = cleaned[3:]
+                        if cleaned.endswith("```"):
+                            cleaned = cleaned[:-3]
+                        cleaned = cleaned.strip()
+                        
+                        element_list = json.loads(cleaned)
+                        
+                        # Ask for confirmation before running
+                        hazard_display = ", ".join(suggested.get("hazard_data", [])) if suggested.get("hazard_data") else "existing data"
+                        element_display = ", ".join(element_list)
+                        
+                        response_data = {
+                            "type": "clarification",
+                            "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?",
+                            "options": [
+                                "1. Yes, run the analysis",
+                                "2. No, cancel"
+                            ],
+                            "suggested_action": {
+                                "tool": "run_exposure_analysis",
+                                "action": "run",
+                                "hazard_source": suggested.get("hazard_source", "imported"),
+                                "hazard_data": suggested.get("hazard_data", []),
+                                "element_source": "existing",
+                                "element_data": element_list,
+                                "awaiting": "confirm_analysis"
+                            }
+                        }
+                    except Exception as e:
+                        print(f"Error parsing element selection: {e}")
+                        response_data = {
+                            "text": "I couldn't understand which elements you want to analyze. Please try again:\n• \"Use land cover\"\n• \"Analyze roads\"\n• \"Use all available elements\""
+                        }
+                else:
+                    response_data = {
+                        "text": "I'm not sure what selection you're making. Please try again."
+                    }
+                
+                json_response = json.dumps(response_data)
+                new_messages = state["messages"] + [AIMessage(content=json_response)]
+                print(f"DEBUG: Appended message at end of clarification handling, total messages: {len(new_messages)}, awaiting was: {awaiting}")
+                return {"messages": new_messages}
+                
+            except Exception as e:
+                print(f"Error processing clarification response: {e}")
+                response_data = {
+                    "text": "I couldn't understand your selection. Please select a file by number (e.g., '1' or '2')."
+                }
+                json_response = json.dumps(response_data)
+                state["messages"].append(AIMessage(content=json_response))
+                return state
+        
+        # Use LLM to parse intent
+        intent_prompt = f"""Analyze this exposure assessment request and extract the parameters.
+
+User request: {last_message}
+
+Available uploaded files: {uploaded_files}
+
+Extract the following information:
+1. action: "run_analysis" or "clear_steps" or "select_hazard" or "select_element"
+2. hazard_source: "existing" or "imported" (if selecting hazard data)
+3. hazard_data: list of hazard data names or file names (e.g., ["Flood - 100 Year Return Period"] or ["Flood-25Year-Apayao.geojson"])
+4. element_source: "existing" or "imported" (if selecting exposure elements)
+5. element_data: list of element names or file names (e.g., ["Land Cover", "Roads"] or ["Landcover-Apayao.geojson"])
+
+CRITICAL RULES:
+- DO NOT auto-fill hazard_data or element_data with available files unless the user EXPLICITLY mentions those specific file names
+- The available files list is for reference only - do not assume the user wants to use them
+- ONLY extract file names that the user explicitly mentions in their request
+- If user mentions specific file names (e.g., "Flood-25Year-Apayao.geojson"), extract them into hazard_data or element_data arrays
+- If user says "with imported data", "using imported data", "use imported files" WITHOUT specifying which data type, set BOTH hazard_source AND element_source to "imported" BUT leave hazard_data and element_data as EMPTY arrays []
+- If user says "imported hazard" or mentions a specific imported file for hazard, set hazard_source to "imported"
+- If user says "imported elements" or mentions a specific imported file for elements, set element_source to "imported"
+- Default to "existing" with EMPTY arrays when user doesn't mention imported data or specific files
+- When user specifies file names, include them in the appropriate data array
+
+Common patterns:
+- "do exposure assessment" (no specifics) → action: run_analysis, hazard_source: "existing", hazard_data: [], element_source: "existing", element_data: []
+- "run exposure analysis with imported data" → action: run_analysis, hazard_source: "imported", element_source: "imported", hazard_data: [], element_data: []
+- "use Flood-25Year-Apayao.geojson for hazard and Landcover-Apayao.geojson for elements" → action: run_analysis, hazard_source: "imported", hazard_data: ["Flood-25Year-Apayao.geojson"], element_source: "imported", element_data: ["Landcover-Apayao.geojson"]
+- "run exposure analysis" (no mention of imported) → action: run_analysis, hazard_source: "existing", element_source: "existing", hazard_data: [], element_data: []
+- "use imported hazard data" → action: run_analysis, hazard_source: "imported", hazard_data: [], element_source: "existing", element_data: []
+- "clear exposure steps" / "reset" → action: clear_steps
+
+Respond ONLY with valid JSON in this format:
+{{
+  "action": "run_analysis",
+  "hazard_source": "imported",
+  "hazard_data": ["Flood-25Year-Apayao.geojson"],
+  "element_source": "imported",
+  "element_data": ["Landcover-Apayao.geojson"]
+}}
+
+If you cannot determine the intent, respond with:
+{{"action": "none"}}
+"""
+        
+        try:
+            llm_response = self.llm.invoke(intent_prompt, system_prompt="You are a JSON parser for exposure assessment commands. Respond only with valid JSON.")
+            print(f"LLM parsed intent: {llm_response}")
+            
+            # Clean up response - remove markdown code blocks if present
+            cleaned_response = llm_response.strip()
+            if cleaned_response.startswith("```json"):
+                cleaned_response = cleaned_response[7:]
+            if cleaned_response.startswith("```"):
+                cleaned_response = cleaned_response[3:]
+            if cleaned_response.endswith("```"):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+            
+            # Parse JSON
+            parsed = json.loads(cleaned_response)
+            action = parsed.get("action", "none")
+            
+            print(f"Parsed action: {action}")
+            
+            if action == "none" or not action:
+                # Could not parse intent
+                response_data = {
+                    "text": "I can help you with exposure assessment. You can:\n\n• Run exposure analysis\n• Select hazard data (flood, earthquake, etc.)\n• Select exposure elements (land cover, roads, buildings)\n• Clear assessment steps\n\nWhat would you like to do?"
+                }
+            elif action == "run_analysis":
+                hazard_source = parsed.get("hazard_source", "existing")
+                element_source = parsed.get("element_source", "existing")
+                hazard_data_list = parsed.get("hazard_data", [])
+                element_data_list = parsed.get("element_data", [])
+                
+                # Check if user hasn't specified any data sources (step-by-step guidance)
+                if (hazard_source == "existing" and not hazard_data_list and 
+                    element_source == "existing" and not element_data_list):
+                    # Guide user to choose data source type first
+                    response_data = {
+                        "type": "clarification",
+                        "question": "Let's set up your exposure assessment! First, which **hazard data** would you like to use?",
+                        "options": [
+                            "1. Use existing data (from the system)",
+                            "2. Use imported data (files you've uploaded)"
+                        ],
+                        "suggested_action": {
+                            "tool": "run_exposure_analysis",
+                            "action": "run",
+                            "awaiting": "hazard_source_selection"
+                        }
+                    }
+                # Check if imported data is requested but no files specified
+                elif hazard_source == "imported" and not hazard_data_list:
+                    if not uploaded_files:
+                        response_data = {
+                            "text": "❌ No uploaded files detected. Please upload hazard data files first before running exposure analysis with imported data."
+                        }
+                    else:
+                        # Ask user to select from uploaded files
+                        response_data = {
+                            "type": "clarification",
+                            "question": "Please select which uploaded file(s) to use as **hazard data**:",
+                            "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                            "suggested_action": {
+                                "tool": "run_exposure_analysis",
+                                "action": "run",
+                                "hazard_source": "imported",
+                                "element_source": element_source,
+                                "awaiting": "hazard_selection"
+                            }
+                        }
+                elif element_source == "imported" and not parsed.get("element_data"):
+                    if not uploaded_files:
+                        response_data = {
+                            "text": "❌ No uploaded files detected. Please upload exposure element files first before running exposure analysis with imported data."
+                        }
+                    else:
+                        # Ask user to select from uploaded files
+                        response_data = {
+                            "type": "clarification",
+                            "question": "Please select which uploaded file(s) to use as **exposure elements**:",
+                            "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                            "suggested_action": {
+                                "tool": "run_exposure_analysis",
+                                "action": "run",
+                                "hazard_source": hazard_source,
+                                "hazard_data": parsed.get("hazard_data", []),
+                                "element_source": "imported",
+                                "awaiting": "element_selection"
+                            }
+                        }
+                else:
+                    # Check if element data is also specified
+                    element_data_list = parsed.get("element_data", [])
+                    hazard_data_list = parsed.get("hazard_data", [])
+                    
+                    # Validate that specified imported files exist
+                    if hazard_source == "imported" and hazard_data_list:
+                        invalid_files = [f for f in hazard_data_list if f not in uploaded_files]
+                        if invalid_files:
+                            response_data = {
+                                "text": f"❌ The following hazard files were not found in uploaded files: {', '.join(invalid_files)}\n\nAvailable files: {', '.join(uploaded_files)}"
+                            }
+                            json_response = json.dumps(response_data)
+                            state["messages"].append(AIMessage(content=json_response))
+                            return state
+                    
+                    if element_source == "imported" and element_data_list:
+                        invalid_files = [f for f in element_data_list if f not in uploaded_files]
+                        if invalid_files:
+                            response_data = {
+                                "text": f"❌ The following element files were not found in uploaded files: {', '.join(invalid_files)}\n\nAvailable files: {', '.join(uploaded_files)}"
+                            }
+                            json_response = json.dumps(response_data)
+                            state["messages"].append(AIMessage(content=json_response))
+                            return state
+                    
+                    if element_source == "existing" and len(element_data_list) == 0:
+                        # Need to ask user which existing elements to use
+                        response_data = {
+                            "text": "✅ **Hazard data selected!**\n\nNow, which **exposure elements** would you like to analyze?\n\nAvailable options:\n• Land Cover\n• Transportation Networks (Roads)\n• Point Features (Buildings, facilities)\n\nYou can say something like:\n• \"Use land cover\"\n• \"Analyze roads and buildings\"\n• \"Use all available elements\""
+                        }
+                    else:
+                        # All data specified, ask for confirmation
+                        hazard_display = ", ".join(hazard_data_list) if hazard_data_list else "existing data"
+                        element_display = ", ".join(element_data_list) if element_data_list else "existing data"
+                        
+                        response_data = {
+                            "type": "clarification",
+                            "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?",
+                            "options": [
+                                "1. Yes, run the analysis",
+                                "2. No, cancel"
+                            ],
+                            "suggested_action": {
+                                "tool": "run_exposure_analysis",
+                                "action": "run",
+                                "hazard_source": hazard_source,
+                                "hazard_data": hazard_data_list,
+                                "element_source": element_source,
+                                "element_data": element_data_list,
+                                "awaiting": "confirm_analysis"
+                            }
+                        }
+            elif action == "clear_steps":
+                # Clear assessment steps
+                response_data = {
+                    "tool": "control_exposure_assessment",
+                    "action": "clear",
+                    "requires_frontend": True
+                }
+            elif action == "select_hazard":
+                # Select hazard data
+                response_data = {
+                    "tool": "control_exposure_assessment",
+                    "action": "select_hazard",
+                    "hazard_source": parsed.get("hazard_source", "existing"),
+                    "hazard_data": parsed.get("hazard_data", []),
+                    "requires_frontend": True
+                }
+            elif action == "select_element":
+                # Select exposure elements
+                response_data = {
+                    "tool": "control_exposure_assessment",
+                    "action": "select_element",
+                    "element_source": parsed.get("element_source", "existing"),
+                    "element_data": parsed.get("element_data", []),
+                    "requires_frontend": True
+                }
+            else:
+                response_data = {
+                    "text": f"I'm not sure how to handle the action: {action}. Please try rephrasing your request."
+                }
+            
+            json_response = json.dumps(response_data)
+            state["messages"].append(AIMessage(content=json_response))
+            
+        except Exception as e:
+            print(f"Error parsing exposure intent: {e}")
+            # Fallback response
+            fallback_response = json.dumps({
+                "text": "I can help you with exposure assessment. Please specify what you'd like to do:\n\n• Run exposure analysis\n• Select hazard data\n• Select exposure elements\n• Clear steps"
+            })
+            state["messages"].append(AIMessage(content=fallback_response))
+        
+        return state

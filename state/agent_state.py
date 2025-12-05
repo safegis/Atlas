@@ -14,3 +14,4 @@ class AgentState(TypedDict):
     clarification_needed: bool
     pending_action: dict | None
     web_search_enabled: bool
+    uploaded_files: list  # List of uploaded file names for exposure assessment

@@ -5,6 +5,7 @@ from .hazard_agent import HazardAgent
 from .qa_agent import QAAgent
 from .clarification_agent import ClarificationAgent
 from .web_search_agent import WebSearchAgent
+from .exposure_agent import ExposureAgent
 
 __all__ = [
     "RouterAgent",
@@ -12,5 +13,6 @@ __all__ = [
     "HazardAgent",
     "QAAgent",
     "ClarificationAgent",
-    "WebSearchAgent"
+    "WebSearchAgent",
+    "ExposureAgent"
 ]

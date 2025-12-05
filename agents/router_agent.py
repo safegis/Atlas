@@ -48,8 +48,19 @@ class RouterAgent:
                 print("Routing to: web_search_agent (web search enabled)")
                 return "web_search_agent"
         
-        # Check if we're in a clarification flow
+        # Check if we're in a clarification flow - but check the tool type first
         if state.get("clarification_needed") or state.get("pending_action"):
+            pending = state.get("pending_action")
+            if pending and isinstance(pending, dict):
+                suggested_action = pending.get('suggested_action', {})
+                tool = suggested_action.get('tool')
+                
+                # Route based on the tool in the pending action
+                if tool == "run_exposure_analysis" or tool == "control_exposure_assessment":
+                    print("Routing to: exposure_agent (has pending exposure action)")
+                    return "exposure_agent"
+            
+            # Default to clarification agent for other pending actions
             print("Routing to: clarification_agent (has pending action)")
             return "clarification_agent"
         
@@ -63,7 +74,10 @@ class RouterAgent:
                               "dark", "navigation", "navigation night",
                               "1", "2", "3"]
         
-        if msg_lower in potential_responses:
+        # Also check if message contains file references (for exposure assessment clarifications)
+        has_file_reference = any(ext in msg_lower for ext in [".geojson", ".shp", ".kml", ".gpkg", ".json"])
+        
+        if msg_lower in potential_responses or has_file_reference:
             # Check if previous message was a clarification
             print(f"Detected potential clarification response, checking previous messages ({len(messages)} total)")
             if len(messages) >= 2:
@@ -90,18 +104,32 @@ class RouterAgent:
                             prev_content = json.loads(content)
                             print(f"Parsed content type: {prev_content.get('type')}")
                             if prev_content.get("type") == "clarification":
-                                print("✓ Routing to: clarification_agent (follow-up to clarification)")
-                                print(f"Setting pending action: {prev_content.get('suggested_action')}")
-                                # Set the pending action from the clarification
-                                state["pending_action"] = prev_content
-                                state["clarification_needed"] = True
-                                return "clarification_agent"
+                                suggested_action = prev_content.get('suggested_action', {})
+                                tool = suggested_action.get('tool')
+                                
+                                # Route based on the tool in the pending action
+                                if tool == "run_exposure_analysis" or tool == "control_exposure_assessment":
+                                    print("✓ Routing to: exposure_agent (follow-up to exposure clarification)")
+                                    state["pending_action"] = prev_content
+                                    state["clarification_needed"] = True
+                                    return "exposure_agent"
+                                else:
+                                    print("✓ Routing to: clarification_agent (follow-up to clarification)")
+                                    print(f"Setting pending action: {suggested_action}")
+                                    state["pending_action"] = prev_content
+                                    state["clarification_needed"] = True
+                                    return "clarification_agent"
                         except Exception as e:
                             print(f"Error parsing message content: {e}")
                         break  # Only check the last AI message
         
         # Use simple keyword-based routing (more reliable than LLM for this)
-        # Hazard Agent - Earthquake, weather, live hazards (CHECK FIRST - higher priority)
+        # Exposure Agent - Exposure assessment (CHECK FIRST - highest priority for assessment)
+        exposure_keywords = ["exposure", "assessment", "analyze exposure", "run analysis",
+                            "exposure analysis", "exposure assessment", "assess exposure",
+                            "clear steps", "select hazard", "select element"]
+        
+        # Hazard Agent - Earthquake, weather, live hazards
         hazard_keywords = ["earthquake", "seismic", "weather", "temperature", "climate",
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
@@ -111,7 +139,13 @@ class RouterAgent:
                               "change to", "switch to", "set to", "use", "apply",
                               "zoom", "fly to", "take me to"]
         
-        # Check for hazard keywords FIRST (higher priority than map)
+        # Check for exposure keywords FIRST (highest priority for assessment)
+        if any(keyword in msg_lower for keyword in exposure_keywords):
+            if not is_question:
+                print("Routing to: exposure_agent")
+                return "exposure_agent"
+        
+        # Check for hazard keywords (higher priority than map)
         if any(keyword in msg_lower for keyword in hazard_keywords):
             if not is_question:
                 print("Routing to: hazard_agent")

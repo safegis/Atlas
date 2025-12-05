@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
 from state import AgentState
-from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent
+from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent, ExposureAgent
 from utils import LlamaCppWrapper
 import os
 
@@ -21,6 +21,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     hazard_agent = HazardAgent(wrapped_llm)
     qa_agent = QAAgent(wrapped_llm)
     clarification_agent = ClarificationAgent()
+    exposure_agent = ExposureAgent(wrapped_llm)
     
     # Initialize web search agent if API key provided
     web_search_agent = None
@@ -36,6 +37,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     workflow.add_node("hazard_agent", hazard_agent.process)
     workflow.add_node("qa_agent", qa_agent.process)
     workflow.add_node("clarification_agent", clarification_agent.process)
+    workflow.add_node("exposure_agent", exposure_agent.process)
     
     # Add web search node if available
     if web_search_agent:
@@ -54,7 +56,8 @@ def create_agent_graph(llm, exa_api_key: str = None):
         "map_agent": "map_agent",
         "hazard_agent": "hazard_agent",
         "qa_agent": "qa_agent",
-        "clarification_agent": "clarification_agent"
+        "clarification_agent": "clarification_agent",
+        "exposure_agent": "exposure_agent"
     }
     
     # Add web search routing if available
@@ -72,6 +75,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     workflow.add_edge("hazard_agent", END)
     workflow.add_edge("qa_agent", END)
     workflow.add_edge("clarification_agent", END)
+    workflow.add_edge("exposure_agent", END)
     
     # Add web search edge if available
     if web_search_agent:
@@ -80,7 +84,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     return workflow.compile()
 
 
-def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False) -> dict:
+def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False, uploaded_files: list = None) -> dict:
     """
     Process a user message through the agent graph
     
@@ -170,7 +174,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
             "user_intent": "",
             "clarification_needed": clarification_needed,
             "pending_action": pending_action,
-            "web_search_enabled": web_search_flag
+            "web_search_enabled": web_search_flag,
+            "uploaded_files": uploaded_files or []
         }
         
         print(f"Initial state created with {len(messages)} messages")

@@ -70,6 +70,7 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[List[dict]] = None
     map_state: Optional[dict] = None
     web_search_enabled: Optional[bool] = False
+    uploaded_files: Optional[List[str]] = None
 
 class ChatResponse(BaseModel):
     response: dict
@@ -130,7 +131,8 @@ async def chat(request: ChatRequest):
             request.message,
             request.conversation_history,
             request.map_state,
-            request.web_search_enabled
+            request.web_search_enabled,
+            request.uploaded_files
         )
         
         # Format conversation history safely
