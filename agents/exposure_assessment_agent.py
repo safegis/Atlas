@@ -34,22 +34,31 @@ class ExposureAssessmentAgent:
                 
                 if awaiting == "hazard_source_selection":
                     # User is choosing between existing or imported hazard data
-                    if not numbers:
+                    # Accept numbers OR keywords
+                    msg_lower = last_message.lower()
+                    choice = None
+                    
+                    if numbers:
+                        choice = int(numbers[0])
+                    elif "existing" in msg_lower or "system" in msg_lower:
+                        choice = 1
+                    elif "import" in msg_lower or "upload" in msg_lower or "file" in msg_lower:
+                        choice = 2
+                    
+                    if not choice:
                         response_data = {
-                            "text": "Please select an option by number:\n1. Use existing data\n2. Use imported data"
+                            "text": "Please select an option:\n• Reply '1' or 'existing' for existing data\n• Reply '2' or 'imported' for imported data"
                         }
                         json_response = json.dumps(response_data)
                         return {"messages": state["messages"] + [AIMessage(content=json_response)]}
-                    
-                    choice = int(numbers[0])
                     if choice == 1:
                         # User chose existing data for hazard
                         response_data = {
                             "type": "clarification",
                             "question": "✅ **Hazard data source selected: Existing data**\n\nNow, which **exposure elements** would you like to use?",
                             "options": [
-                                "1. Use existing data (from the system)",
-                                "2. Use imported data (files you've uploaded)"
+                                "Option 1: Use existing data (from the system)",
+                                "Option 2: Use imported data (files you've uploaded)"
                             ],
                             "suggested_action": {
                                 "tool": "run_exposure_analysis",
@@ -67,8 +76,8 @@ class ExposureAssessmentAgent:
                         else:
                             response_data = {
                                 "type": "clarification",
-                                "question": "Perfect! Please select which uploaded file(s) to use as **hazard data**:",
-                                "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                                "question": "Perfect! Please select which uploaded file(s) to use as **hazard data**:\n\n*Reply with a number or file name (e.g., '1' or 'Flood-25Year-Apayao.geojson')*",
+                                "options": [f"Option {i+1}: {file}" for i, file in enumerate(uploaded_files)],
                                 "suggested_action": {
                                     "tool": "run_exposure_analysis",
                                     "action": "run",
@@ -86,14 +95,23 @@ class ExposureAssessmentAgent:
                 
                 elif awaiting == "element_source_selection":
                     # User is choosing between existing or imported element data
-                    if not numbers:
+                    # Accept numbers OR keywords
+                    msg_lower = last_message.lower()
+                    choice = None
+                    
+                    if numbers:
+                        choice = int(numbers[0])
+                    elif "existing" in msg_lower or "system" in msg_lower:
+                        choice = 1
+                    elif "import" in msg_lower or "upload" in msg_lower or "file" in msg_lower:
+                        choice = 2
+                    
+                    if not choice:
                         response_data = {
-                            "text": "Please select an option by number:\n1. Use existing data\n2. Use imported data"
+                            "text": "Please select an option:\n• Reply '1' or 'existing' for existing data\n• Reply '2' or 'imported' for imported data"
                         }
                         json_response = json.dumps(response_data)
                         return {"messages": state["messages"] + [AIMessage(content=json_response)]}
-                    
-                    choice = int(numbers[0])
                     hazard_source = suggested.get("hazard_source", "existing")
                     hazard_data = suggested.get("hazard_data", [])
                     
@@ -111,8 +129,8 @@ class ExposureAssessmentAgent:
                         else:
                             response_data = {
                                 "type": "clarification",
-                                "question": "Perfect! Please select which uploaded file(s) to use as **exposure elements**:",
-                                "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                                "question": "Perfect! Please select which uploaded file(s) to use as **exposure elements**:\n\n*Reply with a number or file name (e.g., '2' or 'Landcover-Apayao.geojson')*",
+                                "options": [f"Option {i+1}: {file}" for i, file in enumerate(uploaded_files)],
                                 "suggested_action": {
                                     "tool": "run_exposure_analysis",
                                     "action": "run",
@@ -132,18 +150,68 @@ class ExposureAssessmentAgent:
                     print(f"DEBUG: element_source_selection - appended message, total messages: {len(new_messages)}")
                     return {"messages": new_messages}
                 
-                selected_indices = [int(n) - 1 for n in numbers]  # Convert to 0-based index
+                # IMPORTANT: Check for confirm_analysis FIRST before trying to parse as file selection
+                elif awaiting == "confirm_analysis":
+                    # User is confirming whether to run the analysis
+                    # Accept numbers OR keywords
+                    msg_lower = last_message.lower()
+                    choice = None
+                    
+                    if numbers:
+                        choice = int(numbers[0])
+                    elif any(word in msg_lower for word in ["yes", "run", "start", "go", "proceed", "confirm"]):
+                        choice = 1
+                    elif any(word in msg_lower for word in ["no", "cancel", "stop", "abort"]):
+                        choice = 2
+                    
+                    if choice is None:
+                        response_data = {
+                            "text": "Please confirm:\n• Reply '1' or 'yes' to run the analysis\n• Reply '2' or 'no' to cancel"
+                        }
+                        json_response = json.dumps(response_data)
+                        return {"messages": state["messages"] + [AIMessage(content=json_response)]}
+                    
+                    if choice == 1:
+                        # User confirmed, run analysis
+                        response_data = {
+                            "tool": "run_exposure_analysis",
+                            "action": "run",
+                            "hazard_source": suggested.get("hazard_source", "existing"),
+                            "hazard_data": suggested.get("hazard_data", []),
+                            "element_source": suggested.get("element_source", "existing"),
+                            "element_data": suggested.get("element_data", []),
+                            "requires_frontend": True,
+                            "message": "🔄 **Starting exposure analysis...**\n\nThis may take a while depending on the size of your data. Please wait for the analysis to complete."
+                        }
+                    else:
+                        # User cancelled
+                        response_data = {
+                            "text": "Analysis cancelled. You can start over by saying 'Do exposure assessment' or specify your data directly."
+                        }
+                    
+                    json_response = json.dumps(response_data)
+                    # Clear pending action after processing
+                    return {"messages": state["messages"] + [AIMessage(content=json_response)], "pending_action": None}
                 
-                if not selected_indices:
+                # Try to parse as numbers first (for file selection)
+                selected_files = []
+                if numbers:
+                    selected_indices = [int(n) - 1 for n in numbers]  # Convert to 0-based index
+                    selected_files = [uploaded_files[i] for i in selected_indices if i < len(uploaded_files)]
+                
+                # If no numbers, try to match file names
+                if not selected_files:
+                    for file in uploaded_files:
+                        if file.lower() in last_message.lower() or last_message.lower() in file.lower():
+                            selected_files.append(file)
+                
+                if not selected_files:
                     # No valid selection, ask again
                     response_data = {
-                        "text": "Please select a file by number (e.g., '1' or '2') or say 'cancel' to stop."
+                        "text": "Please select a file:\n• Reply with a number (e.g., '1')\n• Or reply with the file name (e.g., 'Flood-25Year-Apayao.geojson')\n• Or say 'cancel' to stop"
                     }
                     json_response = json.dumps(response_data)
                     return {"messages": state["messages"] + [AIMessage(content=json_response)]}
-                
-                # Get selected file names
-                selected_files = [uploaded_files[i] for i in selected_indices if i < len(uploaded_files)]
                 
                 if not selected_files:
                     # Invalid selection
@@ -158,10 +226,10 @@ class ExposureAssessmentAgent:
                     # User selected hazard files in step-by-step mode, now ask for element source
                     response_data = {
                         "type": "clarification",
-                        "question": f"✅ **Hazard file selected:** {', '.join(selected_files)}\n\nNow, which **exposure elements** would you like to use?",
+                        "question": f"✅ **Hazard file selected:** {', '.join(selected_files)}\n\nNow, which **exposure elements** would you like to use?\n\n*Reply with a number or keywords (e.g., '1', 'existing', 'imported')*",
                         "options": [
-                            "1. Use existing data (from the system)",
-                            "2. Use imported data (files you've uploaded)"
+                            "Option 1: Use existing data (from the system)",
+                            "Option 2: Use imported data (files you've uploaded)"
                         ],
                         "suggested_action": {
                             "tool": "run_exposure_analysis",
@@ -181,8 +249,8 @@ class ExposureAssessmentAgent:
                         # Need to ask for element selection next
                         response_data = {
                             "type": "clarification",
-                            "question": "Great! Now please select which uploaded file(s) to use as **exposure elements**:",
-                            "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                            "question": "Great! Now please select which uploaded file(s) to use as **exposure elements**:\n\n*Reply with a number or file name (e.g., '2' or 'Landcover-Apayao.geojson')*",
+                            "options": [f"Option {i+1}: {file}" for i, file in enumerate(uploaded_files)],
                             "suggested_action": {
                                 "tool": "run_exposure_analysis",
                                 "action": "run",
@@ -218,10 +286,10 @@ class ExposureAssessmentAgent:
                             
                             response_data = {
                                 "type": "clarification",
-                                "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?",
+                                "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?\n\n*Reply '1'/'yes' to run or '2'/'no' to cancel*",
                                 "options": [
-                                    "1. Yes, run the analysis",
-                                    "2. No, cancel"
+                                    "Option 1: Yes, run the analysis",
+                                    "Option 2: No, cancel"
                                 ],
                                 "suggested_action": {
                                     "tool": "run_exposure_analysis",
@@ -239,10 +307,10 @@ class ExposureAssessmentAgent:
                     print(f"DEBUG: hazard_source: {suggested.get('hazard_source')}, hazard_data: {suggested.get('hazard_data')}")
                     response_data = {
                         "type": "clarification",
-                        "question": "✅ **All data selected!**\n\n**Hazard:** " + ", ".join(suggested.get("hazard_data", [])) + "\n**Elements:** " + ", ".join(selected_files) + "\n\nReady to run the exposure analysis?",
+                        "question": "✅ **All data selected!**\n\n**Hazard:** " + ", ".join(suggested.get("hazard_data", [])) + "\n**Elements:** " + ", ".join(selected_files) + "\n\nReady to run the exposure analysis?\n\n*Reply '1'/'yes' to run or '2'/'no' to cancel*",
                         "options": [
-                            "1. Yes, run the analysis",
-                            "2. No, cancel"
+                            "Option 1: Yes, run the analysis",
+                            "Option 2: No, cancel"
                         ],
                         "suggested_action": {
                             "tool": "run_exposure_analysis",
@@ -255,38 +323,6 @@ class ExposureAssessmentAgent:
                         }
                     }
                     print(f"DEBUG: response_data set for confirmation: {response_data}")
-                elif awaiting == "confirm_analysis":
-                    # User is confirming whether to run the analysis
-                    if not numbers:
-                        response_data = {
-                            "text": "Please select an option:\n1. Yes, run the analysis\n2. No, cancel"
-                        }
-                        json_response = json.dumps(response_data)
-                        state["messages"].append(AIMessage(content=json_response))
-                        return state
-                    
-                    choice = int(numbers[0])
-                    if choice == 1:
-                        # User confirmed, run analysis
-                        response_data = {
-                            "tool": "run_exposure_analysis",
-                            "action": "run",
-                            "hazard_source": suggested.get("hazard_source", "existing"),
-                            "hazard_data": suggested.get("hazard_data", []),
-                            "element_source": suggested.get("element_source", "existing"),
-                            "element_data": suggested.get("element_data", []),
-                            "requires_frontend": True,
-                            "message": "🔄 **Starting exposure analysis...**\n\nThis may take a while depending on the size of your data. Please wait for the analysis to complete."
-                        }
-                    else:
-                        # User cancelled
-                        response_data = {
-                            "text": "Analysis cancelled. You can start over by saying 'Do exposure assessment' or specify your data directly."
-                        }
-                    
-                    json_response = json.dumps(response_data)
-                    # Clear pending action after processing
-                    return {"messages": state["messages"] + [AIMessage(content=json_response)], "pending_action": None}
                 
                 elif awaiting == "element_data_selection":
                     # User specified which existing elements to use (e.g., "Use land cover")
@@ -326,10 +362,10 @@ Respond ONLY with valid JSON array: ["element1", "element2"]
                         
                         response_data = {
                             "type": "clarification",
-                            "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?",
+                            "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?\n\n*Reply '1'/'yes' to run or '2'/'no' to cancel*",
                             "options": [
-                                "1. Yes, run the analysis",
-                                "2. No, cancel"
+                                "Option 1: Yes, run the analysis",
+                                "Option 2: No, cancel"
                             ],
                             "suggested_action": {
                                 "tool": "run_exposure_analysis",
@@ -393,10 +429,13 @@ CRITICAL RULES:
 Common patterns:
 - "do exposure assessment" (no specifics) → action: run_analysis, hazard_source: "existing", hazard_data: [], element_source: "existing", element_data: []
 - "run exposure analysis with imported data" → action: run_analysis, hazard_source: "imported", element_source: "imported", hazard_data: [], element_data: []
+- "perform exposure assessment using imported data/files" → action: run_analysis, hazard_source: "imported", element_source: "imported", hazard_data: [], element_data: []
 - "use Flood-25Year-Apayao.geojson for hazard and Landcover-Apayao.geojson for elements" → action: run_analysis, hazard_source: "imported", hazard_data: ["Flood-25Year-Apayao.geojson"], element_source: "imported", element_data: ["Landcover-Apayao.geojson"]
 - "run exposure analysis" (no mention of imported) → action: run_analysis, hazard_source: "existing", element_source: "existing", hazard_data: [], element_data: []
 - "use imported hazard data" → action: run_analysis, hazard_source: "imported", hazard_data: [], element_source: "existing", element_data: []
 - "clear exposure steps" / "reset" → action: clear_steps
+
+REMEMBER: Even if you see file names in the available files list, DO NOT include them in hazard_data or element_data unless the user EXPLICITLY mentions those exact file names in their request!
 
 Respond ONLY with valid JSON in this format:
 {{
@@ -448,10 +487,10 @@ If you cannot determine the intent, respond with:
                     # Guide user to choose data source type first
                     response_data = {
                         "type": "clarification",
-                        "question": "Let's set up your exposure assessment! First, which **hazard data** would you like to use?",
+                        "question": "Let's set up your exposure assessment! First, which **hazard data** would you like to use?\n\n*Reply with a number or keywords (e.g., '1', 'existing', 'imported')*",
                         "options": [
-                            "1. Use existing data (from the system)",
-                            "2. Use imported data (files you've uploaded)"
+                            "Option 1: Use existing data (from the system)",
+                            "Option 2: Use imported data (files you've uploaded)"
                         ],
                         "suggested_action": {
                             "tool": "run_exposure_analysis",
@@ -469,8 +508,8 @@ If you cannot determine the intent, respond with:
                         # Ask user to select from uploaded files
                         response_data = {
                             "type": "clarification",
-                            "question": "Please select which uploaded file(s) to use as **hazard data**:",
-                            "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                            "question": "Please select which uploaded file(s) to use as **hazard data**:\n\n*Reply with a number or file name (e.g., '1' or 'Flood-25Year-Apayao.geojson')*",
+                            "options": [f"Option {i+1}: {file}" for i, file in enumerate(uploaded_files)],
                             "suggested_action": {
                                 "tool": "run_exposure_analysis",
                                 "action": "run",
@@ -488,8 +527,8 @@ If you cannot determine the intent, respond with:
                         # Ask user to select from uploaded files
                         response_data = {
                             "type": "clarification",
-                            "question": "Please select which uploaded file(s) to use as **exposure elements**:",
-                            "options": [f"{i+1}. {file}" for i, file in enumerate(uploaded_files)],
+                            "question": "Please select which uploaded file(s) to use as **exposure elements**:\n\n*Reply with a number or file name (e.g., '2' or 'Landcover-Apayao.geojson')*",
+                            "options": [f"Option {i+1}: {file}" for i, file in enumerate(uploaded_files)],
                             "suggested_action": {
                                 "tool": "run_exposure_analysis",
                                 "action": "run",
@@ -537,10 +576,10 @@ If you cannot determine the intent, respond with:
                         
                         response_data = {
                             "type": "clarification",
-                            "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?",
+                            "question": f"✅ **All data selected!**\n\n**Hazard:** {hazard_display}\n**Elements:** {element_display}\n\nReady to run the exposure analysis?\n\n*Reply '1'/'yes' to run or '2'/'no' to cancel*",
                             "options": [
-                                "1. Yes, run the analysis",
-                                "2. No, cancel"
+                                "Option 1: Yes, run the analysis",
+                                "Option 2: No, cancel"
                             ],
                             "suggested_action": {
                                 "tool": "run_exposure_analysis",

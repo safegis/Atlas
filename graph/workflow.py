@@ -132,6 +132,11 @@ def process_message(graph, message: str, conversation_history: list = None, map_
                               "city", "municipality", "municipal",
                               "abra", "aklan", "agusan del norte", "agusan del sur",
                               "dark", "navigation", "navigation night",
+                              "existing", "imported", "import", "upload", "file", "files", "system",
+                              "run", "start", "go", "proceed", "confirm", "stop", "abort",
+                              "option 1", "option 2", "option 3", "option 4", "option 5", "option 6",
+                              "option one", "option two", "option three",
+                              "go with", "use option", "choose option", "select option", "pick option",
                               "1", "2", "3", "4", "5", "6"]
         
         msg_lower = message.lower().strip()
@@ -139,9 +144,13 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         # Check if message contains action keywords - if so, it's a new request, not a clarification response
         has_action_keyword = any(keyword in msg_lower for keyword in action_keywords)
         
+        # Check if message contains file references (for exposure assessment clarifications)
+        has_file_reference = any(ext in msg_lower for ext in [".geojson", ".shp", ".kml", ".gpkg", ".json", ".csv"])
+        
         # Only treat as clarification if it's a simple response without action keywords
-        is_likely_clarification_response = (msg_lower in potential_responses or 
-                                           any(resp in msg_lower for resp in ["agusan", "abra", "aklan"])) and not has_action_keyword
+        is_likely_clarification_response = ((msg_lower in potential_responses or 
+                                            any(resp in msg_lower for resp in potential_responses) or
+                                            has_file_reference) and not has_action_keyword)
         
         if is_likely_clarification_response:
             for msg in reversed(messages[:-1]):  # Check all messages except the new user message
