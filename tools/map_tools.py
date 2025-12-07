@@ -117,6 +117,34 @@ def control_weather_data(action: str, scope: str = "province") -> dict:
 
 
 @tool
+def control_time_of_day(preset: str) -> dict:
+    """
+    Control the time of day lighting in 3D view.
+    
+    Args:
+        preset: One of: "auto", "morning", "daytime", "evening", "nighttime"
+        
+    Returns:
+        dict with time of day control action
+    """
+    valid_presets = ["auto", "morning", "daytime", "evening", "nighttime"]
+    
+    if preset.lower() not in valid_presets:
+        return {
+            "error": f"Invalid preset. Choose from: {', '.join(valid_presets)}",
+            "requires_clarification": True,
+            "available_options": valid_presets
+        }
+    
+    return {
+        "tool": "control_time_of_day",
+        "preset": preset.lower(),
+        "action": "update_lighting",
+        "requires_frontend": True
+    }
+
+
+@tool
 def ask_clarification(question: str, options: list[str]) -> dict:
     """
     Ask the user for clarification when intent is ambiguous.
@@ -143,5 +171,6 @@ TOOLS = [
     switch_view_mode,
     control_earthquake_data,
     control_weather_data,
+    control_time_of_day,
     ask_clarification
 ]

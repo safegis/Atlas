@@ -134,10 +134,11 @@ class RouterAgent:
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
-        # Map Agent - Location, style, view (ACTION keywords only)
+        # Map Agent - Location, style, view, time of day (ACTION keywords only)
         map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
                               "change to", "switch to", "set to", "use", "apply",
-                              "zoom", "fly to", "take me to"]
+                              "zoom", "fly to", "take me to",
+                              "time of day", "lighting", "morning", "daytime", "evening", "nighttime"]
         
         # Check for exposure keywords FIRST (highest priority for assessment)
         if any(keyword in msg_lower for keyword in exposure_keywords):
@@ -145,26 +146,36 @@ class RouterAgent:
                 print("Routing to: exposure_assessment_agent")
                 return "exposure_assessment_agent"
         
-        # Check for hazard keywords (higher priority than map)
-        if any(keyword in msg_lower for keyword in hazard_keywords):
-            if not is_question:
-                print("Routing to: hazard_agent")
-                return "hazard_agent"
+        # Check for map ACTION keywords - prioritize over hazard if both present
+        # This handles compound requests like "switch to 3D and enable earthquakes"
+        has_map_action = any(keyword in msg_lower for keyword in map_action_keywords)
+        has_hazard = any(keyword in msg_lower for keyword in hazard_keywords)
         
-        # Check for map ACTION keywords (not just mentions of map-related terms)
-        if any(keyword in msg_lower for keyword in map_action_keywords):
-            if not is_question:
-                print("Routing to: map_agent")
+        if has_map_action and not is_question:
+            # If it's ONLY about hazards (no map actions), route to hazard agent
+            # Otherwise, route to map agent (it can handle compound requests)
+            if has_hazard and not any(keyword in msg_lower for keyword in ["switch", "change", "set", "show", "go to", "navigate", "zoom", "fly", "style", "view", "mode", "3d", "2d", "time of day", "lighting"]):
+                print("Routing to: hazard_agent (hazard-only request)")
+                return "hazard_agent"
+            else:
+                print("Routing to: map_agent (map action detected)")
                 return "map_agent"
         
-        # Check for specific map style/view change requests
+        # Check for hazard keywords (only if no map actions)
+        if has_hazard and not is_question:
+            print("Routing to: hazard_agent")
+            return "hazard_agent"
+        
+        # Check for specific map style/view/time change requests
         style_keywords = ["satellite", "dark", "light", "outdoors", "navigation", "2d", "3d"]
+        time_keywords = ["time of day", "lighting", "morning", "daytime", "evening", "nighttime", "dawn", "dusk", "noon", "midnight", "auto time"]
         change_keywords = ["change", "switch", "set", "use", "apply", "make it"]
         
         has_style = any(keyword in msg_lower for keyword in style_keywords)
+        has_time = any(keyword in msg_lower for keyword in time_keywords)
         has_change = any(keyword in msg_lower for keyword in change_keywords)
         
-        if has_style and has_change and not is_question:
+        if (has_style or has_time) and has_change and not is_question:
             print("Routing to: map_agent")
             return "map_agent"
         

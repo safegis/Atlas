@@ -44,6 +44,66 @@ class ClarificationAgent:
             })))
             return state
         
+        # Handle time of day clarifications (yes/no or option selection)
+        suggested = pending_action.get("suggested_action", {})
+        if suggested.get("multiple_actions"):
+            # Check if this is a time of day clarification
+            has_time_action = any(action.get("tool") == "control_time_of_day" for action in suggested.get("multiple_actions", []))
+            
+            if has_time_action:
+                # Yes responses (option 1 or affirmative)
+                if (last_message in ["yes", "yeah", "yep", "sure", "ok", "okay", "1", "option 1", "option one", "default"] or 
+                    "yes" in last_message or 
+                    "option 1" in last_message or 
+                    "option one" in last_message or
+                    "default" in last_message or
+                    "first" in last_message):
+                    # Execute the suggested multiple actions
+                    state["messages"].append(AIMessage(content=json.dumps({
+                        "multiple_actions": suggested["multiple_actions"],
+                        "requires_frontend": True
+                    })))
+                    state["clarification_needed"] = False
+                    state["pending_action"] = None
+                    return state
+                
+                # Option 2: Alternative style (satellite instead of default)
+                if (last_message in ["2", "satellite", "option 2", "option two"] or 
+                    "satellite" in last_message or 
+                    "option 2" in last_message or 
+                    "option two" in last_message or
+                    "second" in last_message):
+                    alternative_style = suggested.get("alternative_style", "satellite")
+                    # Replace the style in the first action
+                    modified_actions = []
+                    for action in suggested["multiple_actions"]:
+                        if action.get("tool") == "change_map_style":
+                            modified_actions.append({**action, "style": alternative_style})
+                        else:
+                            modified_actions.append(action)
+                    
+                    state["messages"].append(AIMessage(content=json.dumps({
+                        "multiple_actions": modified_actions,
+                        "requires_frontend": True
+                    })))
+                    state["clarification_needed"] = False
+                    state["pending_action"] = None
+                    return state
+                
+                # No/Cancel responses
+                if (last_message in ["no", "nope", "nah", "cancel", "3", "option 3", "option three"] or 
+                    "cancel" in last_message or 
+                    "option 3" in last_message or
+                    "option three" in last_message or
+                    "nevermind" in last_message or
+                    "never mind" in last_message):
+                    state["messages"].append(AIMessage(content=json.dumps({
+                        "text": "Okay, I've cancelled the time of day change."
+                    })))
+                    state["clarification_needed"] = False
+                    state["pending_action"] = None
+                    return state
+        
         # Helper function to merge actions with pending map actions
         def merge_with_pending_map(action, pending_action):
             pending_map = pending_action.get("pending_map_action")
