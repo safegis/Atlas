@@ -145,6 +145,36 @@ def control_time_of_day(preset: str) -> dict:
 
 
 @tool
+def control_zoom(direction: str, amount: float = 1.0, is_max: bool = False) -> dict:
+    """
+    Control map zoom level.
+    
+    Args:
+        direction: Either "in" (zoom in) or "out" (zoom out)
+        amount: Zoom amount as multiplier (0.1 = small, 0.5 = medium, 1.0 = large)
+                For percentage: 10% = 0.1, 50% = 0.5
+        is_max: If True, zoom to maximum (100% = max zoom in/out)
+        
+    Returns:
+        dict with zoom control action
+    """
+    if direction.lower() not in ["in", "out"]:
+        return {
+            "error": "Invalid direction. Choose 'in' or 'out'",
+            "requires_clarification": True
+        }
+    
+    return {
+        "tool": "control_zoom",
+        "direction": direction.lower(),
+        "amount": amount,
+        "is_max": is_max,
+        "action": "adjust_zoom",
+        "requires_frontend": True
+    }
+
+
+@tool
 def ask_clarification(question: str, options: list[str]) -> dict:
     """
     Ask the user for clarification when intent is ambiguous.
@@ -172,5 +202,6 @@ TOOLS = [
     control_earthquake_data,
     control_weather_data,
     control_time_of_day,
+    control_zoom,
     ask_clarification
 ]

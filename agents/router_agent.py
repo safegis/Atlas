@@ -134,10 +134,10 @@ class RouterAgent:
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
-        # Map Agent - Location, style, view, time of day (ACTION keywords only)
+        # Map Agent - Location, style, view, time of day, zoom (ACTION keywords only)
         map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
                               "change to", "switch to", "set to", "use", "apply",
-                              "zoom", "fly to", "take me to",
+                              "zoom", "zoom in", "zoom out", "fly to", "take me to",
                               "time of day", "lighting", "morning", "daytime", "evening", "nighttime"]
         
         # Check for exposure keywords FIRST (highest priority for assessment)

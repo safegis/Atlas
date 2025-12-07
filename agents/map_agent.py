@@ -250,6 +250,19 @@ Available map actions:
    - Options: auto, morning, daytime, evening, nighttime
    - Examples: "set time to morning", "change lighting to night", "auto time of day"
 
+5. **control_zoom** - Zoom in or out on the map
+   - direction: "in" or "out"
+   - amount: zoom level change (0.1 = small, 0.5 = medium, 1.0 = large)
+   - is_max: true if user wants maximum zoom (100% or "max")
+   - For percentages under 100%: convert to decimal (10% = 0.1, 50% = 0.5)
+   - For 100% or "max": set is_max to true
+   - Examples: "zoom in by 10%" → {"tool": "control_zoom", "direction": "in", "amount": 0.1, "is_max": false}
+   - Examples: "zoom out by 50%" → {"tool": "control_zoom", "direction": "out", "amount": 0.5, "is_max": false}
+   - Examples: "zoom in by 100%" → {"tool": "control_zoom", "direction": "in", "is_max": true}
+   - Examples: "zoom to max" → {"tool": "control_zoom", "direction": "in", "is_max": true}
+   - Examples: "zoom out to max" → {"tool": "control_zoom", "direction": "out", "is_max": true}
+   - Examples: "zoom in a bit" → {"tool": "control_zoom", "direction": "in", "amount": 0.5, "is_max": false}
+
 Respond with JSON array of actions. Each action has: {"tool": "...", "param": "value"}
 
 Examples:
@@ -259,6 +272,11 @@ Examples:
 - "make it darker" → [{"tool": "change_map_style", "style": "dark"}]
 - "set time to morning" → [{"tool": "control_time_of_day", "preset": "morning"}]
 - "change lighting to nighttime" → [{"tool": "control_time_of_day", "preset": "nighttime"}]
+- "zoom in by 10%" → [{"tool": "control_zoom", "direction": "in", "amount": 0.1, "is_max": false}]
+- "zoom out by 50%" → [{"tool": "control_zoom", "direction": "out", "amount": 0.5, "is_max": false}]
+- "zoom in by 100%" → [{"tool": "control_zoom", "direction": "in", "is_max": true}]
+- "zoom to max" → [{"tool": "control_zoom", "direction": "in", "is_max": true}]
+- "zoom in a bit" → [{"tool": "control_zoom", "direction": "in", "amount": 0.5, "is_max": false}]
 
 Return ONLY the JSON array, no explanation."""
 
@@ -310,6 +328,11 @@ Return ONLY the JSON array, no explanation."""
                 elif tool == "control_time_of_day":
                     preset = action.get("preset", "auto")
                     actions.append({"tool": "control_time_of_day", "preset": preset, "requires_frontend": True})
+                elif tool == "control_zoom":
+                    direction = action.get("direction", "in")
+                    amount = action.get("amount", 1.0)
+                    is_max = action.get("is_max", False)
+                    actions.append({"tool": "control_zoom", "direction": direction, "amount": amount, "is_max": is_max, "requires_frontend": True})
             
             # Prioritize actions for best UX: style → view → time/other → location
             if len(actions) > 1:
