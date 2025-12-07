@@ -138,7 +138,8 @@ class RouterAgent:
         map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
                               "change to", "switch to", "set to", "use", "apply",
                               "zoom", "zoom in", "zoom out", "fly to", "take me to",
-                              "time of day", "lighting", "morning", "daytime", "evening", "nighttime"]
+                              "time of day", "lighting", "morning", "daytime", "evening", "nighttime",
+                              "i want to see", "want to see", "see", "display", "view"]
         
         # Check for exposure keywords FIRST (highest priority for assessment)
         if any(keyword in msg_lower for keyword in exposure_keywords):
@@ -151,10 +152,16 @@ class RouterAgent:
         has_map_action = any(keyword in msg_lower for keyword in map_action_keywords)
         has_hazard = any(keyword in msg_lower for keyword in hazard_keywords)
         
-        if has_map_action and not is_question:
+        # Check for location patterns (place names, addresses, coordinates)
+        # Common patterns: "show me [place]", "I want to see [place]", "[place] in the map"
+        location_indicators = ["in the map", "on the map", "in map", "on map"]
+        has_location_request = any(indicator in msg_lower for indicator in location_indicators)
+        
+        # If message contains location indicators or map actions, route to map agent
+        if (has_map_action or has_location_request) and not is_question:
             # If it's ONLY about hazards (no map actions), route to hazard agent
             # Otherwise, route to map agent (it can handle compound requests)
-            if has_hazard and not any(keyword in msg_lower for keyword in ["switch", "change", "set", "show", "go to", "navigate", "zoom", "fly", "style", "view", "mode", "3d", "2d", "time of day", "lighting"]):
+            if has_hazard and not any(keyword in msg_lower for keyword in ["switch", "change", "set", "show", "go to", "navigate", "zoom", "fly", "style", "view", "mode", "3d", "2d", "time of day", "lighting", "see", "display"]):
                 print("Routing to: hazard_agent (hazard-only request)")
                 return "hazard_agent"
             else:

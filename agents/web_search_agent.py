@@ -93,14 +93,16 @@ IMPORTANT RULES:
 2. If asked about unrelated topics (entertainment, sports, general trivia, etc.), politely decline and say:
    "I'm specialized in GIS, disaster management, and geospatial analysis. I can only answer questions related to these topics. Please ask me about mapping, hazards, emergency response, or spatial analysis."
 3. Include inline citations using [1], [2], [3] etc. throughout your answer
-4. DO NOT include a "Sources:" section at the end - citations will be displayed automatically below
-5. Provide comprehensive, well-cited answers for relevant topics
-6. CRITICAL: Respond with PLAIN TEXT ONLY. Do NOT format your response as JSON. Do NOT include {"text": ...} in your response.
+4. CRITICAL: DO NOT include "References:", "Sources:", "Citations:", or any list of URLs at the end
+5. CRITICAL: End your answer naturally after the last sentence - DO NOT add any reference list
+6. The citations will be displayed automatically in a separate section by the UI
+7. Provide comprehensive, well-cited answers for relevant topics
+8. CRITICAL: Respond with PLAIN TEXT ONLY. Do NOT format your response as JSON. Do NOT include {"text": ...} in your response.
 
 Example format:
 "According to recent studies [1], disaster management systems have improved significantly [2]. The technology has evolved rapidly [3]."
 
-End your response naturally without listing sources. Write in plain text, not JSON."""
+STOP after your last sentence. Do NOT add "References:" or list URLs. Write in plain text, not JSON."""
 
             # Combine user query with search context
             prompt = f"""User Question: {last_message}
