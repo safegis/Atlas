@@ -47,11 +47,83 @@ Always be clear and concise. If locations are ambiguous, ask for clarification.
         
         print(f"Pathfinder Agent processing: {last_message}")
         
+        # Check if we have a pending pathfinder action waiting for locations
+        pending_action = state.get("pending_action")
+        print(f"Pending action from state: {pending_action}")
+        
+        # If no pending action in state, check conversation history for recent clarification
+        if not pending_action or not isinstance(pending_action, dict):
+            print("No pending action in state, checking conversation history")
+            # Look for the last AI message with a clarification
+            for i in range(len(messages) - 2, -1, -1):
+                msg = messages[i]
+                content = None
+                msg_type = None
+                
+                if hasattr(msg, 'content'):
+                    content = msg.content
+                    msg_type = getattr(msg, 'type', None)
+                elif isinstance(msg, dict):
+                    content = msg.get('content')
+                    msg_type = msg.get('role')
+                
+                if msg_type in ['ai', 'assistant'] and content:
+                    try:
+                        prev_content = json.loads(content)
+                        if prev_content.get("type") == "clarification":
+                            suggested_action = prev_content.get('suggested_action', {})
+                            if suggested_action.get('tool') == 'find_route' and suggested_action.get('awaiting'):
+                                print(f"Found pathfinder clarification in history: {suggested_action}")
+                                pending_action = suggested_action
+                                break
+                    except:
+                        pass
+        
+        if pending_action and isinstance(pending_action, dict):
+            # Check if it's a pathfinder clarification
+            if pending_action.get("type") == "pathfinder_awaiting_locations":
+                print("Handling location response from pending action")
+                return self._handle_location_response(state, last_message, pending_action)
+            
+            # Also check suggested_action for pathfinder awaiting
+            suggested_action = pending_action.get("suggested_action", {})
+            if suggested_action.get("awaiting") in ["start", "destination", "direction_choice"]:
+                print("Handling location response from suggested_action")
+                return self._handle_location_response(state, last_message, suggested_action)
+            
+            # Check if pending_action itself has awaiting field
+            if pending_action.get("awaiting") in ["start", "destination", "direction_choice"]:
+                print("Handling location response from pending_action directly")
+                return self._handle_location_response(state, last_message, pending_action)
+        
         # Parse the intent from the message
         action = self._parse_intent(last_message)
         print(f"Parsed action: {action}")
         
         if action:
+            # Check if it's a route finding request
+            if action.get("tool") == "find_route":
+                start = action.get("start", "")
+                destination = action.get("destination", "")
+                
+                # Check if the message is ambiguous (e.g., "find routes between X and Y" without clear direction)
+                # Look for patterns like "between 2 locations", "between X and Y", etc.
+                msg_lower = last_message.lower()
+                is_ambiguous = any(pattern in msg_lower for pattern in [
+                    "between 2 locations",
+                    "between two locations",
+                    "between these locations",
+                    "between the following",
+                ])
+                
+                # If it's ambiguous and both locations are provided, ask for clarification
+                if is_ambiguous and start and destination:
+                    return self._request_direction_clarification(state, start, destination, action.get("mode", "all"))
+                
+                # If locations are missing or generic, ask for them
+                if not start or not destination or start == "current location" or destination == "current location":
+                    return self._request_locations(state, start, destination, action.get("mode", "all"))
+            
             # Add response text
             action["text"] = self._generate_response_text(action)
             state["messages"].append(AIMessage(content=json.dumps(action)))
@@ -63,6 +135,235 @@ Always be clear and concise. If locations are ambiguous, ask for clarification.
             ))
         
         return state
+    
+    def _request_direction_clarification(self, state: AgentState, location1: str, location2: str, mode: str) -> AgentState:
+        """Ask user to clarify which location is start and which is destination"""
+        
+        response = {
+            "type": "clarification",
+            "question": f"I found two locations:\n\n1. **{location1}**\n2. **{location2}**\n\nWhich one would you like to start from?",
+            "options": [location1, location2],
+            "suggested_action": {
+                "tool": "find_route",
+                "awaiting": "direction_choice",
+                "location1": location1,
+                "location2": location2,
+                "mode": mode
+            }
+        }
+        
+        # Mark that we're awaiting direction clarification
+        state["pending_action"] = {
+            "type": "pathfinder_awaiting_locations",
+            **response["suggested_action"]
+        }
+        state["clarification_needed"] = True
+        
+        state["messages"].append(AIMessage(content=json.dumps(response)))
+        return state
+    
+    def _request_locations(self, state: AgentState, start: str, destination: str, mode: str) -> AgentState:
+        """Request missing location information from user"""
+        
+        if not start or start == "current location":
+            # Ask for start location
+            response = {
+                "type": "clarification",
+                "question": "I'd be happy to help you find routes! Where would you like to start from?",
+                "options": ["Enter your starting location"],
+                "suggested_action": {
+                    "tool": "find_route",
+                    "awaiting": "start",
+                    "destination": destination if destination and destination != "current location" else "",
+                    "mode": mode
+                }
+            }
+        elif not destination or destination == "current location":
+            # Ask for destination
+            response = {
+                "type": "clarification",
+                "question": f"Great! Starting from **{start}**. Where would you like to go?",
+                "options": ["Enter your destination"],
+                "suggested_action": {
+                    "tool": "find_route",
+                    "start": start,
+                    "awaiting": "destination",
+                    "mode": mode
+                }
+            }
+        else:
+            # Both provided, shouldn't reach here
+            return state
+        
+        # Mark that we're awaiting location info
+        state["pending_action"] = {
+            "type": "pathfinder_awaiting_locations",
+            **response["suggested_action"]
+        }
+        state["clarification_needed"] = True
+        
+        state["messages"].append(AIMessage(content=json.dumps(response)))
+        return state
+    
+    def _handle_location_response(self, state: AgentState, user_input: str, pending: dict) -> AgentState:
+        """Handle user's response with location information"""
+        
+        awaiting = pending.get("awaiting")
+        
+        # Handle direction choice (when user picks which location is start)
+        if awaiting == "direction_choice":
+            location1 = pending.get("location1", "")
+            location2 = pending.get("location2", "")
+            mode = pending.get("mode", "all")
+            
+            # Check which location the user chose
+            user_input_lower = user_input.lower().strip()
+            location1_lower = location1.lower()
+            location2_lower = location2.lower()
+            
+            # Check if user input matches location1 or location2 (or contains it)
+            if location1_lower in user_input_lower or user_input_lower in location1_lower:
+                # User chose location1 as start
+                start = location1
+                destination = location2
+            elif location2_lower in user_input_lower or user_input_lower in location2_lower:
+                # User chose location2 as start
+                start = location2
+                destination = location1
+            else:
+                # User might have said "1" or "2" or "first" or "second"
+                if any(word in user_input_lower for word in ["1", "first", "one"]):
+                    start = location1
+                    destination = location2
+                elif any(word in user_input_lower for word in ["2", "second", "two"]):
+                    start = location2
+                    destination = location1
+                else:
+                    # Unclear response, ask again
+                    response = {
+                        "type": "clarification",
+                        "question": f"I'm not sure which location you meant. Please choose:\n\n1. **{location1}**\n2. **{location2}**\n\nWhich one is your starting point?",
+                        "options": [location1, location2],
+                        "suggested_action": {
+                            "tool": "find_route",
+                            "awaiting": "direction_choice",
+                            "location1": location1,
+                            "location2": location2,
+                            "mode": mode
+                        }
+                    }
+                    state["messages"].append(AIMessage(content=json.dumps(response)))
+                    return state
+            
+            # Now we have both start and destination
+            action = {
+                "tool": "find_route",
+                "start": start,
+                "destination": destination,
+                "mode": mode,
+                "requires_frontend": True,
+                "action": "calculate_routes",
+                "text": f"Perfect! Finding routes from {start} to {destination} using {self._get_mode_text(mode)}. I'll show you the available options with traffic information."
+            }
+            state["pending_action"] = None
+            state["clarification_needed"] = False
+            state["messages"].append(AIMessage(content=json.dumps(action)))
+            return state
+        
+        # Extract just the location name from the user's response
+        # Remove common prefixes like "Here's the starting location:", "The destination should be:", etc.
+        location = user_input.strip()
+        
+        # Remove common prefixes
+        prefixes_to_remove = [
+            "here's the starting location:",
+            "the starting location is:",
+            "starting location:",
+            "start location:",
+            "here's the destination:",
+            "the destination should be:",
+            "the destination is:",
+            "destination:",
+            "it's",
+            "it is"
+        ]
+        
+        location_lower = location.lower()
+        for prefix in prefixes_to_remove:
+            if location_lower.startswith(prefix):
+                location = location[len(prefix):].strip()
+                break
+        
+        if awaiting == "start":
+            # User provided start location
+            start = location
+            destination = pending.get("destination", "")
+            mode = pending.get("mode", "all")
+            
+            if not destination:
+                # Still need destination
+                response = {
+                    "type": "clarification",
+                    "question": f"Perfect! Starting from **{start}**. Where would you like to go?",
+                    "options": ["Enter your destination"],
+                    "suggested_action": {
+                        "tool": "find_route",
+                        "start": start,
+                        "awaiting": "destination",
+                        "mode": mode
+                    }
+                }
+                state["pending_action"] = {
+                    "type": "pathfinder_awaiting_locations",
+                    **response["suggested_action"]
+                }
+                state["messages"].append(AIMessage(content=json.dumps(response)))
+            else:
+                # Have both locations now
+                action = {
+                    "tool": "find_route",
+                    "start": start,
+                    "destination": destination,
+                    "mode": mode,
+                    "requires_frontend": True,
+                    "action": "calculate_routes",
+                    "text": f"Finding routes from {start} to {destination} using {self._get_mode_text(mode)}. I'll show you the available options with traffic information."
+                }
+                state["pending_action"] = None
+                state["clarification_needed"] = False
+                state["messages"].append(AIMessage(content=json.dumps(action)))
+        
+        elif awaiting == "destination":
+            # User provided destination
+            destination = location
+            start = pending.get("start", "")
+            mode = pending.get("mode", "all")
+            
+            # Have both locations now
+            action = {
+                "tool": "find_route",
+                "start": start,
+                "destination": destination,
+                "mode": mode,
+                "requires_frontend": True,
+                "action": "calculate_routes",
+                "text": f"Finding routes from {start} to {destination} using {self._get_mode_text(mode)}. I'll show you the available options with traffic information."
+            }
+            state["pending_action"] = None
+            state["clarification_needed"] = False
+            state["messages"].append(AIMessage(content=json.dumps(action)))
+        
+        return state
+    
+    def _get_mode_text(self, mode: str) -> str:
+        """Get human-readable mode text"""
+        return {
+            "all": "all available modes",
+            "driving": "driving",
+            "walking": "walking",
+            "cycling": "cycling",
+            "motorcycle": "motorcycle"
+        }.get(mode, mode)
     
     def _parse_intent(self, message: str) -> dict | None:
         """Parse pathfinder intents using LLM"""
@@ -76,9 +377,13 @@ Available pathfinder actions:
    - Extract: start location, destination location, mode (optional)
    - Modes: all, driving, walking, cycling, motorcycle
    - Mode synonyms: car/driving, bicycle/bike/cycling, pedestrian/walking, motorcycle/motorbike
+   - If locations are not provided or unclear, return empty strings for start/destination
    - Examples: "find route from SF to LA" → {"tool": "find_route", "start": "San Francisco", "destination": "Los Angeles", "mode": "all"}
    - Examples: "drive to the airport" → {"tool": "find_route", "start": "current location", "destination": "airport", "mode": "driving"}
    - Examples: "walking directions to the park" → {"tool": "find_route", "start": "current location", "destination": "park", "mode": "walking"}
+   - Examples: "route optimization" → {"tool": "find_route", "start": "", "destination": "", "mode": "all"}
+   - Examples: "perform route optimization between 2 locations" → {"tool": "find_route", "start": "", "destination": "", "mode": "all"}
+   - Examples: "optimize route" → {"tool": "find_route", "start": "", "destination": "", "mode": "all"}
 
 2. **change_route_mode** - Change transportation mode
    - Modes: all, driving, walking, cycling, motorcycle

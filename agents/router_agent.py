@@ -52,6 +52,11 @@ class RouterAgent:
         if state.get("clarification_needed") or state.get("pending_action"):
             pending = state.get("pending_action")
             if pending and isinstance(pending, dict):
+                # Check if it's a pathfinder clarification
+                if pending.get('type') == 'pathfinder_awaiting_locations':
+                    print("Routing to: pathfinder_agent (has pending pathfinder action)")
+                    return "pathfinder_agent"
+                
                 suggested_action = pending.get('suggested_action', {})
                 tool = suggested_action.get('tool')
                 
@@ -59,6 +64,9 @@ class RouterAgent:
                 if tool == "run_exposure_analysis" or tool == "control_exposure_assessment":
                     print("Routing to: exposure_assessment_agent (has pending exposure action)")
                     return "exposure_assessment_agent"
+                elif tool == "find_route":
+                    print("Routing to: pathfinder_agent (has pending route finding action)")
+                    return "pathfinder_agent"
             
             # Default to clarification agent for other pending actions
             print("Routing to: clarification_agent (has pending action)")
@@ -77,7 +85,13 @@ class RouterAgent:
         # Also check if message contains file references (for exposure assessment clarifications)
         has_file_reference = any(ext in msg_lower for ext in [".geojson", ".shp", ".kml", ".gpkg", ".json"])
         
-        if msg_lower in potential_responses or has_file_reference:
+        # Check if message is short and might be a location name (for pathfinder)
+        # Location responses are typically short (1-5 words) and don't contain action keywords
+        is_short_response = len(last_message.split()) <= 5
+        has_no_action_keywords = not any(keyword in msg_lower for keyword in ["find", "show", "search", "enable", "disable", "switch", "change"])
+        might_be_location = is_short_response and has_no_action_keywords
+        
+        if msg_lower in potential_responses or has_file_reference or might_be_location:
             # Check if previous message was a clarification
             print(f"Detected potential clarification response, checking previous messages ({len(messages)} total)")
             if len(messages) >= 2:
@@ -113,6 +127,11 @@ class RouterAgent:
                                     state["pending_action"] = prev_content
                                     state["clarification_needed"] = True
                                     return "exposure_assessment_agent"
+                                elif tool == "find_route":
+                                    print("✓ Routing to: pathfinder_agent (follow-up to pathfinder clarification)")
+                                    state["pending_action"] = prev_content
+                                    state["clarification_needed"] = True
+                                    return "pathfinder_agent"
                                 else:
                                     print("✓ Routing to: clarification_agent (follow-up to clarification)")
                                     print(f"Setting pending action: {suggested_action}")
@@ -139,7 +158,9 @@ class RouterAgent:
                                "sort by fastest", "sort by safest", "sort by best balance",
                                "show fastest", "show safest", "best balance",
                                "sort routes by", "sort the routes by", "sort routes",
-                               "fastest route", "safest route", "best balance route"]
+                               "fastest route", "safest route", "best balance route",
+                               "route optimization", "optimize route", "optimize routes",
+                               "perform route optimization", "route planning"]
         
         # Exposure Agent - Exposure assessment
         exposure_keywords = ["exposure", "assessment", "analyze exposure", "run analysis",
