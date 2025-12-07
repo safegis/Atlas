@@ -402,53 +402,27 @@ Respond ONLY with valid JSON array: ["element1", "element2"]
                 return state
         
         # Use LLM to parse intent
-        intent_prompt = f"""Analyze this exposure assessment request and extract the parameters.
+        intent_prompt = f"""Parse this exposure assessment request.
 
 User request: {last_message}
 
-Available uploaded files: {uploaded_files}
-
-Extract the following information:
+TASK: Extract these fields ONLY:
 1. action: "run_analysis" or "clear_steps" or "select_hazard" or "select_element"
-2. hazard_source: "existing" or "imported" (if selecting hazard data)
-3. hazard_data: list of hazard data names or file names (e.g., ["Flood - 100 Year Return Period"] or ["Flood-25Year-Apayao.geojson"])
-4. element_source: "existing" or "imported" (if selecting exposure elements)
-5. element_data: list of element names or file names (e.g., ["Land Cover", "Roads"] or ["Landcover-Apayao.geojson"])
+2. hazard_source: "existing" or "imported"
+3. hazard_data: [] (ALWAYS EMPTY unless user names specific files)
+4. element_source: "existing" or "imported"
+5. element_data: [] (ALWAYS EMPTY unless user names specific files)
 
-CRITICAL RULES:
-- DO NOT auto-fill hazard_data or element_data with available files unless the user EXPLICITLY mentions those specific file names
-- The available files list is for reference only - do not assume the user wants to use them
-- ONLY extract file names that the user explicitly mentions in their request
-- If user mentions specific file names (e.g., "Flood-25Year-Apayao.geojson"), extract them into hazard_data or element_data arrays
-- If user says "with imported data", "using imported data", "use imported files" WITHOUT specifying which data type, set BOTH hazard_source AND element_source to "imported" BUT leave hazard_data and element_data as EMPTY arrays []
-- If user says "imported hazard" or mentions a specific imported file for hazard, set hazard_source to "imported"
-- If user says "imported elements" or mentions a specific imported file for elements, set element_source to "imported"
-- Default to "existing" with EMPTY arrays when user doesn't mention imported data or specific files
-- When user specifies file names, include them in the appropriate data array
+RULES:
+- If user says "with imported files/data" WITHOUT naming files → hazard_source="imported", hazard_data=[], element_source="imported", element_data=[]
+- If user says "Perform an exposure assessment with imported files" → hazard_source="imported", hazard_data=[], element_source="imported", element_data=[]
+- If user names a file like "use Flood-25Year.geojson" → include it in hazard_data or element_data
+- Default: hazard_source="existing", hazard_data=[], element_source="existing", element_data=[]
 
-Common patterns:
-- "do exposure assessment" (no specifics) → action: run_analysis, hazard_source: "existing", hazard_data: [], element_source: "existing", element_data: []
-- "run exposure analysis with imported data" → action: run_analysis, hazard_source: "imported", element_source: "imported", hazard_data: [], element_data: []
-- "perform exposure assessment using imported data/files" → action: run_analysis, hazard_source: "imported", element_source: "imported", hazard_data: [], element_data: []
-- "use Flood-25Year-Apayao.geojson for hazard and Landcover-Apayao.geojson for elements" → action: run_analysis, hazard_source: "imported", hazard_data: ["Flood-25Year-Apayao.geojson"], element_source: "imported", element_data: ["Landcover-Apayao.geojson"]
-- "run exposure analysis" (no mention of imported) → action: run_analysis, hazard_source: "existing", element_source: "existing", hazard_data: [], element_data: []
-- "use imported hazard data" → action: run_analysis, hazard_source: "imported", hazard_data: [], element_source: "existing", element_data: []
-- "clear exposure steps" / "reset" → action: clear_steps
+IGNORE THIS (for reference only): Available files are {uploaded_files}
 
-REMEMBER: Even if you see file names in the available files list, DO NOT include them in hazard_data or element_data unless the user EXPLICITLY mentions those exact file names in their request!
-
-Respond ONLY with valid JSON in this format:
-{{
-  "action": "run_analysis",
-  "hazard_source": "imported",
-  "hazard_data": ["Flood-25Year-Apayao.geojson"],
-  "element_source": "imported",
-  "element_data": ["Landcover-Apayao.geojson"]
-}}
-
-If you cannot determine the intent, respond with:
-{{"action": "none"}}
-"""
+Respond with JSON only:
+{{"action": "run_analysis", "hazard_source": "imported", "hazard_data": [], "element_source": "imported", "element_data": []}}"""
         
         try:
             llm_response = self.llm.invoke(intent_prompt, system_prompt="You are a JSON parser for exposure assessment commands. Respond only with valid JSON.")
