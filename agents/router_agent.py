@@ -124,7 +124,24 @@ class RouterAgent:
                         break  # Only check the last AI message
         
         # Use simple keyword-based routing (more reliable than LLM for this)
-        # Exposure Agent - Exposure assessment (CHECK FIRST - highest priority for assessment)
+        # Pathfinder Agent - Route planning and navigation (CHECK FIRST - highest priority for routing)
+        pathfinder_keywords = ["route", "routes", "directions", "navigate to", "navigation",
+                               "find route", "find a route", "show route", "show routes",
+                               "get to", "how to get", "way to", "path to", "drive to",
+                               "walk to", "cycle to", "bike to", "fastest route", "safest route",
+                               "best route", "quickest way", "driving directions", "walking directions",
+                               "cycling directions", "pathfinder", "traffic", "avoid traffic",
+                               "switch mode", "change mode", "switch to driving", "switch to walking",
+                               "switch to cycling", "switch to motorcycle", "switch to car",
+                               "switch to bicycle", "switch to pedestrian", "change to driving",
+                               "change to walking", "change to cycling", "show driving routes",
+                               "show walking routes", "show cycling routes", "show all modes",
+                               "sort by fastest", "sort by safest", "sort by best balance",
+                               "show fastest", "show safest", "best balance",
+                               "sort routes by", "sort the routes by", "sort routes",
+                               "fastest route", "safest route", "best balance route"]
+        
+        # Exposure Agent - Exposure assessment
         exposure_keywords = ["exposure", "assessment", "analyze exposure", "run analysis",
                             "exposure analysis", "exposure assessment", "assess exposure",
                             "clear steps", "select hazard", "select element"]
@@ -141,7 +158,13 @@ class RouterAgent:
                               "time of day", "lighting", "morning", "daytime", "evening", "nighttime",
                               "i want to see", "want to see", "see", "display", "view"]
         
-        # Check for exposure keywords FIRST (highest priority for assessment)
+        # Check for pathfinder keywords FIRST (highest priority for routing)
+        if any(keyword in msg_lower for keyword in pathfinder_keywords):
+            if not is_question:
+                print("Routing to: pathfinder_agent")
+                return "pathfinder_agent"
+        
+        # Check for exposure keywords (second priority for assessment)
         if any(keyword in msg_lower for keyword in exposure_keywords):
             if not is_question:
                 print("Routing to: exposure_assessment_agent")

@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
 from state import AgentState
-from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent, ExposureAssessmentAgent
+from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent, ExposureAssessmentAgent, PathfinderAgent
 from utils import LlamaCppWrapper
 import os
 
@@ -22,6 +22,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     qa_agent = QAAgent(wrapped_llm)
     clarification_agent = ClarificationAgent()
     exposure_agent = ExposureAssessmentAgent(wrapped_llm)
+    pathfinder_agent = PathfinderAgent(wrapped_llm)
     
     # Initialize web search agent if API key provided
     web_search_agent = None
@@ -38,6 +39,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     workflow.add_node("qa_agent", qa_agent.process)
     workflow.add_node("clarification_agent", clarification_agent.process)
     workflow.add_node("exposure_assessment_agent", exposure_agent.process)
+    workflow.add_node("pathfinder_agent", pathfinder_agent.process)
     
     # Add web search node if available
     if web_search_agent:
@@ -57,7 +59,8 @@ def create_agent_graph(llm, exa_api_key: str = None):
         "hazard_agent": "hazard_agent",
         "qa_agent": "qa_agent",
         "clarification_agent": "clarification_agent",
-        "exposure_assessment_agent": "exposure_assessment_agent"
+        "exposure_assessment_agent": "exposure_assessment_agent",
+        "pathfinder_agent": "pathfinder_agent"
     }
     
     # Add web search routing if available
@@ -76,6 +79,7 @@ def create_agent_graph(llm, exa_api_key: str = None):
     workflow.add_edge("qa_agent", END)
     workflow.add_edge("clarification_agent", END)
     workflow.add_edge("exposure_assessment_agent", END)
+    workflow.add_edge("pathfinder_agent", END)
     
     # Add web search edge if available
     if web_search_agent:

@@ -6,6 +6,7 @@ from .qa_agent import QAAgent
 from .clarification_agent import ClarificationAgent
 from .web_search_agent import WebSearchAgent
 from .exposure_assessment_agent import ExposureAssessmentAgent
+from .pathfinder_agent import PathfinderAgent
 
 __all__ = [
     "RouterAgent",
@@ -14,5 +15,6 @@ __all__ = [
     "QAAgent",
     "ClarificationAgent",
     "WebSearchAgent",
-    "ExposureAssessmentAgent"
+    "ExposureAssessmentAgent",
+    "PathfinderAgent"
 ]
