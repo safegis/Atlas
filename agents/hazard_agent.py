@@ -320,6 +320,35 @@ class HazardAgent:
     def _parse_intent(self, message: str) -> dict | None:
         """Parse hazard monitoring intents using LLM for natural language understanding"""
         
+        # Check if this is just an "open panel" command
+        msg_lower = message.lower()
+        open_keywords = ["open", "show", "display"]
+        
+        is_open_command = any(keyword in msg_lower for keyword in open_keywords)
+        
+        # Check for Live Hazard Monitor (live earthquake/weather monitoring)
+        mentions_live_monitor = ("live" in msg_lower and "hazard" in msg_lower) or "live hazard monitor" in msg_lower
+        
+        # Check for Hazard Layers panel (static layers in map layers)
+        mentions_hazard_layers = ("hazard" in msg_lower and "layer" in msg_lower) or "hazard layers" in msg_lower
+        
+        if is_open_command and mentions_live_monitor and "panel" in msg_lower:
+            # User wants to open the live hazard monitor panel
+            return {
+                "tool": "open_live_hazard_monitor",
+                "action": "show_panel",
+                "requires_frontend": True,
+                "text": "Opening the Live Hazard Monitor panel. You can now enable earthquake and weather monitoring."
+            }
+        elif is_open_command and mentions_hazard_layers and "panel" in msg_lower:
+            # User wants to open the hazard layers in the map layers panel
+            return {
+                "tool": "open_layers_panel",
+                "action": "show_hazard_layers",
+                "requires_frontend": True,
+                "text": "Opening the Hazard Layers panel. You can now view and manage hazard layers on the map."
+            }
+        
         system_prompt = """You are a hazard monitoring intent parser. Extract the user's intent from their message.
 
 Available hazard actions:

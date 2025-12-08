@@ -401,6 +401,26 @@ Respond ONLY with valid JSON array: ["element1", "element2"]
                 state["messages"].append(AIMessage(content=json_response))
                 return state
         
+        # Check if this is just an "open panel" command
+        msg_lower = last_message.lower()
+        open_keywords = ["open", "show", "display"]
+        panel_keywords = ["panel", "tool", "interface", "window"]
+        
+        is_open_command = any(keyword in msg_lower for keyword in open_keywords)
+        mentions_panel = any(keyword in msg_lower for keyword in panel_keywords)
+        
+        if is_open_command and mentions_panel and "exposure" in msg_lower:
+            # User just wants to open the panel, not run analysis
+            response_data = {
+                "tool": "control_exposure_assessment",
+                "action": "show_panel",
+                "requires_frontend": True,
+                "text": "Opening the Exposure Assessment panel. You can now select hazard data and exposure elements to analyze."
+            }
+            json_response = json.dumps(response_data)
+            state["messages"].append(AIMessage(content=json_response))
+            return state
+        
         # Use LLM to parse intent
         intent_prompt = f"""Parse this exposure assessment request.
 

@@ -167,6 +167,22 @@ class MapAgent:
         
         msg_lower = message.lower()
         
+        # Check if this is an "open panel" command for layers
+        open_keywords = ["open", "show", "display"]
+        is_open_command = any(keyword in msg_lower for keyword in open_keywords)
+        
+        # Check for Critical Facility Layers panel
+        mentions_critical_facility = ("critical facility" in msg_lower or "critical facilities" in msg_lower) and "layer" in msg_lower
+        
+        if is_open_command and mentions_critical_facility and "panel" in msg_lower:
+            # User wants to open the critical facility layers panel
+            return {
+                "tool": "open_layers_panel",
+                "action": "show_critical_facility_layers",
+                "requires_frontend": True,
+                "text": "Opening the Critical Facility Layers panel. You can now view and manage critical facility layers on the map."
+            }
+        
         # Check if this is a time of day request - needs special handling for 2D/incompatible styles
         # BUT: Skip validation if user explicitly requests style/view changes in the same message
         time_keywords = ["time of day", "lighting", "morning", "daytime", "evening", "nighttime", "dawn", "dusk", "noon", "midnight", "auto time"]

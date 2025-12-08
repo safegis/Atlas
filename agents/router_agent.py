@@ -179,6 +179,14 @@ class RouterAgent:
                               "time of day", "lighting", "morning", "daytime", "evening", "nighttime",
                               "i want to see", "want to see", "see", "display", "view"]
         
+        # Check for layer panel commands (critical facility, hazard layers, etc.)
+        layer_panel_keywords = ["open", "show", "display"]
+        has_layer_panel_request = (
+            any(keyword in msg_lower for keyword in layer_panel_keywords) and
+            "panel" in msg_lower and
+            ("layer" in msg_lower or "layers" in msg_lower)
+        )
+        
         # Check for pathfinder keywords FIRST (highest priority for routing)
         if any(keyword in msg_lower for keyword in pathfinder_keywords):
             if not is_question:
@@ -190,6 +198,20 @@ class RouterAgent:
             if not is_question:
                 print("Routing to: exposure_assessment_agent")
                 return "exposure_assessment_agent"
+        
+        # Check for layer panel requests - route based on layer type
+        if has_layer_panel_request and not is_question:
+            # Check if it's hazard layers or critical facility layers
+            if "hazard" in msg_lower:
+                print("Routing to: hazard_agent (hazard layers panel request)")
+                return "hazard_agent"
+            elif "critical facility" in msg_lower or "critical facilities" in msg_lower:
+                print("Routing to: map_agent (critical facility layers panel request)")
+                return "map_agent"
+            else:
+                # Generic layers panel request - route to map agent
+                print("Routing to: map_agent (generic layers panel request)")
+                return "map_agent"
         
         # Check for map ACTION keywords - prioritize over hazard if both present
         # This handles compound requests like "switch to 3D and enable earthquakes"
