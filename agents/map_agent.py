@@ -141,6 +141,112 @@ class MapAgent:
         else:
             return "auto"
     
+    def _parse_boundary_intent(self, message: str) -> dict | None:
+        """Parse add boundary commands"""
+        msg_lower = message.lower()
+        
+        # Extract parameters
+        source = None
+        country = None
+        admin_level = None
+        
+        # Detect data source
+        if "geoboundaries" in msg_lower or "geo boundaries" in msg_lower:
+            source = "geoBoundaries"
+        elif "gadm" in msg_lower:
+            source = "GADM"
+        elif "natural earth" in msg_lower or "naturalearth" in msg_lower:
+            source = "Natural Earth"
+        
+        # Detect country - common patterns
+        country_patterns = {
+            "afghanistan": "Afghanistan",
+            "philippines": "Philippines",
+            "philippine": "Philippines",
+            "ph": "Philippines",
+            "japan": "Japan",
+            "china": "China",
+            "indonesia": "Indonesia",
+            "thailand": "Thailand",
+            "vietnam": "Vietnam",
+            "malaysia": "Malaysia",
+            "singapore": "Singapore",
+            "united states": "United States",
+            "usa": "United States",
+            "us": "United States",
+            "america": "United States",
+            "canada": "Canada",
+            "mexico": "Mexico",
+            "uk": "United Kingdom",
+            "united kingdom": "United Kingdom",
+            "australia": "Australia",
+            "india": "India",
+            "brazil": "Brazil",
+            "france": "France",
+            "germany": "Germany",
+            "italy": "Italy",
+            "spain": "Spain",
+        }
+        
+        # Check patterns with word boundaries to avoid false matches
+        # Sort by length (longest first) to match more specific patterns first
+        for pattern, country_name in sorted(country_patterns.items(), key=lambda x: len(x[0]), reverse=True):
+            # Use word boundaries to ensure exact matches
+            import re
+            if re.search(r'\b' + re.escape(pattern) + r'\b', msg_lower):
+                country = country_name
+                break
+        
+        # Detect admin level
+        # Patterns: "admin level 3", "level 3", "adm3", "admin 3", "ADM3"
+        import re
+        
+        # Try "admin level X" or "level X"
+        level_match = re.search(r'(?:admin\s+)?level\s+(\d)', msg_lower)
+        if level_match:
+            admin_level = int(level_match.group(1))
+        else:
+            # Try "admX" or "admin X"
+            adm_match = re.search(r'adm(?:in)?\s*(\d)', msg_lower)
+            if adm_match:
+                admin_level = int(adm_match.group(1))
+        
+        # Map admin level descriptions to numbers
+        level_descriptions = {
+            "country": 0,
+            "province": 1,
+            "region": 1,
+            "state": 1,
+            "district": 2,
+            "municipality": 3,
+            "city": 3,
+            "barangay": 4,
+        }
+        
+        if admin_level is None:
+            for desc, level in level_descriptions.items():
+                if desc in msg_lower:
+                    admin_level = level
+                    break
+        
+        # Build response
+        if source or country or admin_level is not None:
+            return {
+                "tool": "add_boundary",
+                "source": source,
+                "country": country,
+                "admin_level": admin_level,
+                "requires_frontend": True,
+                "text": f"Adding boundaries{f' from {source}' if source else ''}{f' for {country}' if country else ''}{f' at admin level {admin_level}' if admin_level is not None else ''}."
+            }
+        
+        # If no parameters detected, return a generic add boundary action
+        return {
+            "tool": "add_boundary",
+            "requires_frontend": True,
+            "text": "Opening the Add Boundaries panel. Please specify the data source, country, and admin level."
+        }
+    
     def _detect_ambiguous(self, message: str) -> dict | None:
         """Detect ambiguous map requests"""
         msg_lower = message.lower()
@@ -167,6 +273,20 @@ class MapAgent:
         
         msg_lower = message.lower()
         
+        # IMPORTANT: Check for "clear boundaries" commands FIRST, before any LLM calls
+        # This prevents the LLM from misinterpreting the command
+        # Check for "clear" + "boundary/boundaries/border/borders" (with optional words in between like "all")
+        has_clear = any(word in msg_lower for word in ["clear", "remove", "delete"])
+        has_boundary = any(word in msg_lower for word in ["boundary", "boundaries", "border", "borders"])
+        has_clear_boundary = has_clear and has_boundary
+        
+        if has_clear_boundary:
+            return {
+                "tool": "clear_boundary",
+                "requires_frontend": True,
+                "text": "Clearing all boundaries from the map."
+            }
+        
         # Check if this is an "open panel" command for layers
         open_keywords = ["open", "show", "display"]
         is_open_command = any(keyword in msg_lower for keyword in open_keywords)
@@ -182,6 +302,16 @@ class MapAgent:
                 "requires_frontend": True,
                 "text": "Opening the Critical Facility Layers panel. You can now view and manage critical facility layers on the map."
             }
+        
+        # Check for "add boundaries" commands
+        add_boundary_keywords = ["add boundary", "add boundaries", "add border", "add borders", "show boundary", "show boundaries"]
+        has_add_boundary = any(keyword in msg_lower for keyword in add_boundary_keywords)
+        
+        if has_add_boundary:
+            # Parse boundary parameters
+            boundary_action = self._parse_boundary_intent(message)
+            if boundary_action:
+                return boundary_action
         
         # Check if this is a time of day request - needs special handling for 2D/incompatible styles
         # BUT: Skip validation if user explicitly requests style/view changes in the same message

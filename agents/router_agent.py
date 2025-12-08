@@ -172,12 +172,15 @@ class RouterAgent:
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
-        # Map Agent - Location, style, view, time of day, zoom (ACTION keywords only)
+        # Map Agent - Location, style, view, time of day, zoom, boundaries (ACTION keywords only)
         map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
                               "change to", "switch to", "set to", "use", "apply",
                               "zoom", "zoom in", "zoom out", "fly to", "take me to",
                               "time of day", "lighting", "morning", "daytime", "evening", "nighttime",
-                              "i want to see", "want to see", "see", "display", "view"]
+                              "i want to see", "want to see", "see", "display", "view",
+                              "add boundary", "add boundaries", "add border", "add borders",
+                              "show boundary", "show boundaries",
+                              "clear boundary", "clear boundaries", "remove boundary", "remove boundaries"]
         
         # Check for layer panel commands (critical facility, hazard layers, etc.)
         layer_panel_keywords = ["open", "show", "display"]
