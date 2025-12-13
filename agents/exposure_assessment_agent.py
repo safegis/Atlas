@@ -428,21 +428,22 @@ User request: {last_message}
 
 TASK: Extract these fields ONLY:
 1. action: "run_analysis" or "clear_steps" or "select_hazard" or "select_element"
-2. hazard_source: "existing" or "imported"
+2. hazard_source: "existing" or "imported" or "unspecified"
 3. hazard_data: [] (ALWAYS EMPTY unless user names specific files)
-4. element_source: "existing" or "imported"
+4. element_source: "existing" or "imported" or "unspecified"
 5. element_data: [] (ALWAYS EMPTY unless user names specific files)
 
 RULES:
-- If user says "with imported files/data" WITHOUT naming files → hazard_source="imported", hazard_data=[], element_source="imported", element_data=[]
-- If user says "Perform an exposure assessment with imported files" → hazard_source="imported", hazard_data=[], element_source="imported", element_data=[]
-- If user names a file like "use Flood-25Year.geojson" → include it in hazard_data or element_data
-- Default: hazard_source="existing", hazard_data=[], element_source="existing", element_data=[]
+- If user explicitly says "with imported files/data" → hazard_source="imported", element_source="imported"
+- If user explicitly says "with existing data" → hazard_source="existing", element_source="existing"
+- If user names a file like "use Flood-25Year.geojson" → include it in hazard_data or element_data AND set source to "imported"
+- If user just says "Perform an exposure assessment" without specifying data source → hazard_source="unspecified", element_source="unspecified"
+- Default for unclear requests: hazard_source="unspecified", element_source="unspecified"
 
 IGNORE THIS (for reference only): Available files are {uploaded_files}
 
 Respond with JSON only:
-{{"action": "run_analysis", "hazard_source": "imported", "hazard_data": [], "element_source": "imported", "element_data": []}}"""
+{{"action": "run_analysis", "hazard_source": "unspecified", "hazard_data": [], "element_source": "unspecified", "element_data": []}}"""
         
         try:
             llm_response = self.llm.invoke(intent_prompt, system_prompt="You are a JSON parser for exposure assessment commands. Respond only with valid JSON.")
@@ -470,13 +471,29 @@ Respond with JSON only:
                     "text": "I can help you with exposure assessment. You can:\n\n• Run exposure analysis\n• Select hazard data (flood, earthquake, etc.)\n• Select exposure elements (land cover, roads, buildings)\n• Clear assessment steps\n\nWhat would you like to do?"
                 }
             elif action == "run_analysis":
-                hazard_source = parsed.get("hazard_source", "existing")
-                element_source = parsed.get("element_source", "existing")
+                hazard_source = parsed.get("hazard_source", "unspecified")
+                element_source = parsed.get("element_source", "unspecified")
                 hazard_data_list = parsed.get("hazard_data", [])
                 element_data_list = parsed.get("element_data", [])
                 
+                # Check if user hasn't specified data sources - ask them to choose
+                if hazard_source == "unspecified" or element_source == "unspecified":
+                    # Guide user to choose data source type first
+                    response_data = {
+                        "type": "clarification",
+                        "question": "Let's set up your exposure assessment! First, which **hazard data** would you like to use?\n\n*Reply with a number or keywords (e.g., '1', 'existing', 'imported')*",
+                        "options": [
+                            "Option 1: Use existing data (from the system)",
+                            "Option 2: Use imported data (files you've uploaded)"
+                        ],
+                        "suggested_action": {
+                            "tool": "run_exposure_analysis",
+                            "action": "run",
+                            "awaiting": "hazard_source_selection"
+                        }
+                    }
                 # Check if user hasn't specified any data sources (step-by-step guidance)
-                if (hazard_source == "existing" and not hazard_data_list and 
+                elif (hazard_source == "existing" and not hazard_data_list and 
                     element_source == "existing" and not element_data_list):
                     # Guide user to choose data source type first
                     response_data = {
