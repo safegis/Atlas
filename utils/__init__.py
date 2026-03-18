@@ -1,4 +1,4 @@
 """Utility modules"""
-from .llm_helper import LlamaCppWrapper
+from .llm_helper import LlamaCppWrapper, OllamaWrapper
 
-__all__ = ["LlamaCppWrapper"]
+__all__ = ["LlamaCppWrapper", "OllamaWrapper"]

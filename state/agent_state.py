@@ -1,5 +1,5 @@
 """Agent state definition for LangGraph workflow"""
-from typing import TypedDict, Annotated, Sequence
+from typing import TypedDict, Annotated, Sequence, Optional
 from langchain_core.messages import BaseMessage
 import operator
 
@@ -12,6 +12,6 @@ class AgentState(TypedDict):
     map_state: dict
     user_intent: str
     clarification_needed: bool
-    pending_action: dict | None
+    pending_action: Optional[dict]
     web_search_enabled: bool
     uploaded_files: list  # List of uploaded file names for exposure assessment

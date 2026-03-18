@@ -1,5 +1,6 @@
 """Map agent for handling location, style, and view mode"""
 import json
+from typing import Optional
 from langchain_core.messages import AIMessage
 from state import AgentState
 from tools import search_location, change_map_style, switch_view_mode
@@ -141,22 +142,35 @@ class MapAgent:
         else:
             return "auto"
     
-    def _parse_boundary_intent(self, message: str) -> dict | None:
-        """Parse add boundary commands"""
-        msg_lower = message.lower()
-        
+    def _normalize_step_message(self, message: str) -> str:
+        """Extract the main intent from step-by-step prompts (e.g. 'then add Philippines boundaries' -> 'add Philippines boundaries')."""
+        msg_lower = message.lower().strip()
+        for prefix in ("then ", "now ", "next ", "after that ", "and then ", "and also ", "also "):
+            if msg_lower.startswith(prefix):
+                return msg_lower[len(prefix):].strip()
+        return msg_lower
+
+    def _parse_boundary_intent(self, message: str) -> Optional[dict]:
+        """Parse add boundary commands. Supports step-by-step prompts and many phrasings."""
+        # Normalize step-by-step: "then add Philippines boundaries" -> "add Philippines boundaries"
+        msg_normalized = self._normalize_step_message(message)
+        msg_lower = msg_normalized.lower()
+
         # Extract parameters
         source = None
         country = None
         admin_level = None
-        
-        # Detect data source
-        if "geoboundaries" in msg_lower or "geo boundaries" in msg_lower:
-            source = "geoBoundaries"
-        elif "gadm" in msg_lower:
+
+        # Default source for Simulation-Studio is geoBoundaries (only supported source in UI)
+        source = "geoBoundaries"
+
+        # Override if user explicitly mentions another source (for future use)
+        if "gadm" in msg_lower:
             source = "GADM"
         elif "natural earth" in msg_lower or "naturalearth" in msg_lower:
             source = "Natural Earth"
+        elif "geoboundaries" in msg_lower or "geo boundaries" in msg_lower:
+            source = "geoBoundaries"
         
         # Detect country - common patterns
         country_patterns = {
@@ -211,43 +225,53 @@ class MapAgent:
             if adm_match:
                 admin_level = int(adm_match.group(1))
         
-        # Map admin level descriptions to numbers
+        # Map admin level descriptions to numbers (admin 0 = country, 1 = state/province/region, etc.)
         level_descriptions = {
             "country": 0,
+            "national": 0,
             "province": 1,
+            "provinces": 1,
+            "provincial": 1,
             "region": 1,
+            "regions": 1,
+            "regional": 1,
             "state": 1,
+            "states": 1,
+            "admin level 1": 1,
+            "level 1": 1,
             "district": 2,
+            "districts": 2,
+            "admin level 2": 2,
+            "level 2": 2,
             "municipality": 3,
+            "municipalities": 3,
             "city": 3,
+            "cities": 3,
+            "admin level 3": 3,
+            "level 3": 3,
             "barangay": 4,
+            "admin level 4": 4,
+            "level 4": 4,
         }
-        
         if admin_level is None:
             for desc, level in level_descriptions.items():
                 if desc in msg_lower:
                     admin_level = level
                     break
         
-        # Build response
-        if source or country or admin_level is not None:
-            return {
-                "tool": "add_boundary",
-                "source": source,
-                "country": country,
-                "admin_level": admin_level,
-                "requires_frontend": True,
-                "text": f"Adding boundaries{f' from {source}' if source else ''}{f' for {country}' if country else ''}{f' at admin level {admin_level}' if admin_level is not None else ''}."
-            }
-        
-        # If no parameters detected, return a generic add boundary action
+        # Build response (source is always geoBoundaries by default)
         return {
             "tool": "add_boundary",
+            "source": source,
+            "country": country,
+            "admin_level": admin_level,
             "requires_frontend": True,
-            "text": "Opening the Add Boundaries panel. Please specify the data source, country, and admin level."
+            "text": f"Adding boundaries{f' for {country}' if country else ''}{f' at admin level {admin_level}' if admin_level is not None else ''}. Opening the Add Boundaries panel."
+            if (country or admin_level is not None)
+            else "Opening the Add Boundaries panel. Select a country and admin level (e.g. by province).",
         }
     
-    def _detect_ambiguous(self, message: str) -> dict | None:
+    def _detect_ambiguous(self, message: str) -> Optional[dict]:
         """Detect ambiguous map requests"""
         msg_lower = message.lower()
         
@@ -267,8 +291,8 @@ class MapAgent:
             }
         
         return None
-    
-    def _parse_intent(self, message: str, map_state: dict) -> dict | None:
+
+    def _parse_intent(self, message: str, map_state: dict) -> Optional[dict]:
         """Parse map intents using LLM for natural language understanding"""
         
         msg_lower = message.lower()
@@ -286,7 +310,7 @@ class MapAgent:
                 "requires_frontend": True,
                 "text": "Clearing all boundaries from the map."
             }
-        
+
         # Check if this is an "open panel" command for layers
         open_keywords = ["open", "show", "display"]
         is_open_command = any(keyword in msg_lower for keyword in open_keywords)
@@ -303,12 +327,31 @@ class MapAgent:
                 "text": "Opening the Critical Facility Layers panel. You can now view and manage critical facility layers on the map."
             }
         
-        # Check for "add boundaries" commands
-        add_boundary_keywords = ["add boundary", "add boundaries", "add border", "add borders", "show boundary", "show boundaries"]
-        has_add_boundary = any(keyword in msg_lower for keyword in add_boundary_keywords)
-        
+        # Check for "add/show/display/load boundaries" commands (including step-by-step: "then add ...")
+        add_boundary_keywords = [
+            "add boundary", "add boundaries", "add border", "add borders",
+            "show boundary", "show boundaries", "show border", "show borders",
+            "display boundary", "display boundaries", "display border", "display borders",
+            "load boundary", "load boundaries", "load border", "load borders",
+            "put boundary", "put boundaries", "put border", "put borders",
+            "draw boundary", "draw boundaries", "open boundary", "open boundaries",
+            "add boundaries to the map", "add boundaries to map", "boundaries panel",
+            "boundaries for", "borders for", "boundaries of", "borders of",
+            "country boundary", "country boundaries", "national border", "national borders",
+            "administrative boundary", "administrative boundaries",
+            "by province", "by region", "by municipality", "province level", "regional boundary",
+        ]
+        # Use normalized message so "then add Philippines boundaries" is detected
+        msg_for_boundary = self._normalize_step_message(message)
+        msg_boundary_lower = msg_for_boundary.lower()
+        has_add_boundary = any(kw in msg_boundary_lower for kw in add_boundary_keywords)
+        # Also trigger if message clearly asks for boundaries of a place (e.g. "Philippines boundaries", "show me Japan's borders")
+        if not has_add_boundary and ("boundary" in msg_boundary_lower or "boundaries" in msg_boundary_lower or "border" in msg_boundary_lower or "borders" in msg_boundary_lower):
+            action_verbs = ["add", "show", "display", "load", "put", "draw", "open", "see", "view", "get", "want"]
+            if any(v in msg_boundary_lower for v in action_verbs) or "for " in msg_boundary_lower or " of " in msg_boundary_lower:
+                has_add_boundary = True
+
         if has_add_boundary:
-            # Parse boundary parameters
             boundary_action = self._parse_boundary_intent(message)
             if boundary_action:
                 return boundary_action

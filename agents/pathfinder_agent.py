@@ -1,5 +1,6 @@
 """Pathfinder agent for route planning and navigation"""
 import json
+from typing import Optional
 from langchain_core.messages import HumanMessage, AIMessage
 from tools.pathfinder_tools import PATHFINDER_TOOLS
 from state import AgentState
@@ -365,7 +366,7 @@ Always be clear and concise. If locations are ambiguous, ask for clarification.
             "motorcycle": "motorcycle"
         }.get(mode, mode)
     
-    def _parse_intent(self, message: str) -> dict | None:
+    def _parse_intent(self, message: str) -> Optional[dict]:
         """Parse pathfinder intents using LLM"""
         
         msg_lower = message.lower()

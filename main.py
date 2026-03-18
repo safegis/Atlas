@@ -3,17 +3,22 @@ SafeGIS AI Backend - LangGraph Multi-Agent System
 FastAPI server with LangGraph orchestration
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from llama_cpp import Llama
 import os
-import tempfile
-import speech_recognition as sr
+import json
+import asyncio
 from typing import Optional, List
 import uvicorn
+import websockets
+
+from dotenv import load_dotenv
+load_dotenv()
+load_dotenv(".env.local")
 
 from graph import create_agent_graph, process_message
+from utils import OllamaWrapper
 
 # ============================================================================
 # APP INITIALIZATION
@@ -31,34 +36,20 @@ app.add_middleware(
 )
 
 # ============================================================================
-# LOAD LLM
+# LOAD LLM (Ollama - local Gemma or other model)
 # ============================================================================
 
-MODEL_PATH = "gemma-3n-E4B-it-Q4_0.gguf"
-print("Loading Gemma model...")
-try:
-    llm = Llama(
-        model_path=MODEL_PATH,
-        n_ctx=4096,  # Increased context window for longer conversations and responses
-        n_threads=max(1, os.cpu_count() // 2),
-        n_gpu_layers=0,
-        verbose=False
-    )
-    print("Gemma model loaded!")
-except Exception as e:
-    print(f"Failed to load Gemma model: {e}")
-    raise
-
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv('.env.local')
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma")
+print(f"Using Ollama model: {OLLAMA_MODEL}")
+llm_wrapper = OllamaWrapper(model=OLLAMA_MODEL)
+llm = None  # No GGUF; health check uses agent_graph
 
 # Exa.ai API key for web search
 EXA_API_KEY = os.getenv("EXA_API_KEY")
 
 # Create LangGraph agent system
 print("Creating LangGraph agent system...")
-agent_graph = create_agent_graph(llm, exa_api_key=EXA_API_KEY)
+agent_graph = create_agent_graph(llm_wrapper=llm_wrapper, exa_api_key=EXA_API_KEY)
 print("Agent system ready!")
 
 # ============================================================================
@@ -78,16 +69,11 @@ class ChatResponse(BaseModel):
     requires_clarification: bool = False
     conversation_history: List[dict]
 
-class TranscribeResponse(BaseModel):
-    transcription: str
-    success: bool
-    error: Optional[str] = None
-
-# ============================================================================
-# SPEECH RECOGNITION
-# ============================================================================
-
-recognizer = sr.Recognizer()
+# ElevenLabs API key for real-time speech-to-text and TTS (keep server-side only)
+ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
+ELEVENLABS_WS_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+ELEVENLABS_VOICE_ID = (os.getenv("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM").strip()  # Rachel
 
 # ============================================================================
 # ENDPOINTS
@@ -107,7 +93,7 @@ def health_check():
     return {
         "status": "healthy",
         "message": "SafeGIS AI Backend is running",
-        "llm_loaded": llm is not None,
+        "llm_loaded": agent_graph is not None,
         "agent_graph_loaded": agent_graph is not None,
         "system": "LangGraph Multi-Agent"
     }
@@ -157,87 +143,148 @@ async def chat(request: ChatRequest):
         print(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/transcribe", response_model=TranscribeResponse)
-async def transcribe_audio(audio: UploadFile = File(...)):
+@app.websocket("/transcribe-ws")
+async def transcribe_ws(websocket: WebSocket):
     """
-    Transcribe audio to text using Google Speech Recognition
-    Falls back to offline Sphinx if Google API is unavailable
+    WebSocket proxy to ElevenLabs real-time speech-to-text.
+    Client sends input_audio_chunk messages; server forwards partial/committed transcripts.
     """
-    try:
-        audio_content = await audio.read()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as temp_original:
-            temp_original.write(audio_content)
-            temp_original_path = temp_original.name
+    await websocket.accept()
+    if not ELEVENLABS_API_KEY:
+        await websocket.send_json({
+            "message_type": "error",
+            "error": "ELEVENLABS_API_KEY not configured",
+        })
+        await websocket.close()
+        return
 
-        temp_wav_path = temp_original_path.replace(".tmp", ".wav")
+    additional_headers = {"xi-api-key": ELEVENLABS_API_KEY}
+    # 48kHz from browser (no resampling); VAD auto-commits on silence; English only
+    url = f"{ELEVENLABS_WS_URL}?audio_format=pcm_48000&commit_strategy=vad&language_code=en"
 
+    async def forward_client_to_elevenlabs():
         try:
-            # Try to convert audio to WAV using pydub
-            try:
-                from pydub import AudioSegment
-                from pydub.utils import which
+            async with websockets.connect(url, additional_headers=additional_headers) as eleven_ws:
+                async def forward_elevenlabs_to_client():
+                    try:
+                        async for raw in eleven_ws:
+                            try:
+                                msg = json.loads(raw)
+                                await websocket.send_json(msg)
+                            except Exception as e:
+                                print(f"ElevenLabs->client forward error: {e}")
+                    except asyncio.CancelledError:
+                        pass
 
-                if which("ffmpeg") is None:
-                    raise ImportError("ffmpeg not found")
-
-                audio_segment = AudioSegment.from_file(temp_original_path)
-                audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
-                audio_segment.export(temp_wav_path, format="wav")
-                print(f"Audio converted successfully: {temp_wav_path}")
-
-            except ImportError as e:
-                print(f"pydub/ffmpeg not available: {e}")
-                import shutil
-                shutil.copy2(temp_original_path, temp_wav_path)
-                print(f"Using original file format: {temp_wav_path}")
-
-            with sr.AudioFile(temp_wav_path) as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.2)
-                audio_data = recognizer.record(source)
-                print(f"Audio data recorded successfully")
-                
+                task = asyncio.create_task(forward_elevenlabs_to_client())
                 try:
-                    text = recognizer.recognize_google(audio_data)
-                    print(f"Transcription successful: {text}")
-                    return TranscribeResponse(transcription=text, success=True)
-                
-                except sr.UnknownValueError:
-                    print("Speech recognition could not understand audio")
-                    return TranscribeResponse(
-                        transcription="",
-                        success=False,
-                        error="Could not understand audio"
-                    )
-                
-                except sr.RequestError as e:
-                    print(f"Could not request results from Google Speech Recognition service; {e}")
+                    async for raw in websocket.iter_text():
+                        try:
+                            # Forward client JSON to ElevenLabs
+                            await eleven_ws.send(raw)
+                        except Exception as e:
+                            print(f"Client->ElevenLabs forward error: {e}")
+                            break
+                finally:
+                    task.cancel()
                     try:
-                        text = recognizer.recognize_sphinx(audio_data)
-                        print(f"Offline transcription successful: {text}")
-                        return TranscribeResponse(transcription=text, success=True)
-                    except Exception as sphinx_error:
-                        print(f"Offline recognition also failed: {sphinx_error}")
-                        return TranscribeResponse(
-                            transcription="",
-                            success=False,
-                            error=f"Recognition service error: {str(e)}"
-                        )
-        finally:
-            for temp_path in [temp_original_path, temp_wav_path]:
-                if os.path.exists(temp_path):
-                    try:
-                        os.unlink(temp_path)
-                        print(f"Cleaned up temporary file: {temp_path}")
-                    except Exception as cleanup_error:
-                        print(f"Failed to cleanup {temp_path}: {cleanup_error}")
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+        except websockets.exceptions.InvalidStatusCode as e:
+            await websocket.send_json({
+                "message_type": "error",
+                "error": f"ElevenLabs connection failed: {e}",
+            })
+        except Exception as e:
+            print(f"Transcribe WebSocket error: {e}")
+            try:
+                await websocket.send_json({
+                    "message_type": "error",
+                    "error": str(e),
+                })
+            except Exception:
+                pass
 
+    try:
+        await forward_client_to_elevenlabs()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# ELEVENLABS TTS (conversational mode – Atlas speaks)
+# ============================================================================
+
+class TTSRequest(BaseModel):
+    text: str
+
+@app.get("/tts-verify")
+async def tts_verify():
+    """
+    Verify ELEVENLABS_API_KEY by calling ElevenLabs /v1/user.
+    Returns 200 if key is valid, 401/500 with detail if not.
+    """
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY not set")
+    import httpx
+    headers = {"xi-api-key": ELEVENLABS_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get("https://api.elevenlabs.io/v1/user", headers=headers)
+            if resp.status_code == 200:
+                return {"ok": True, "message": "API key is valid"}
+            return Response(
+                content=resp.text,
+                status_code=resp.status_code,
+                media_type="application/json",
+            )
     except Exception as e:
-        print(f"Transcription error: {str(e)}")
-        return TranscribeResponse(
-            transcription="",
-            success=False,
-            error=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tts")
+async def text_to_speech(request: TTSRequest):
+    """
+    Convert text to speech via ElevenLabs. Returns MP3 bytes for conversational mode.
+    """
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY not configured")
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="text is required")
+
+    import httpx
+    url = f"{ELEVENLABS_TTS_URL}/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    payload = {"text": request.text.strip()}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            return Response(
+                content=resp.content,
+                media_type="audio/mpeg",
+                headers={"Content-Disposition": "inline"},
+            )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            err_body = e.response.text
+            print("ElevenLabs TTS 401 Unauthorized. Response:", err_body)
+            print("Your key works for /v1/user but not TTS. In the key's permissions, enable any 'Speech' / 'Text-to-Speech' / 'Generate' scope.")
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============================================================================
 # LEGACY ENDPOINTS (for backward compatibility during migration)
