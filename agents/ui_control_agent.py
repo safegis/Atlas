@@ -181,6 +181,8 @@ class UIControlAgent:
                 "upload panel",
                 "upload files",
                 "import map files",
+                "import file",
+                "import files",
                 "open import",
                 "show import",
                 "add files panel",
@@ -190,7 +192,7 @@ class UIControlAgent:
                 "tool": "open_panel",
                 "panel": "import_files_panel",
                 "requires_frontend": True,
-                "text": "Opening the Import Map Files panel.",
+                "text": "Opening the file import panel.",
             }
 
         # Live hazard monitor
