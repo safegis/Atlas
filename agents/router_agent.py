@@ -166,21 +166,61 @@ class RouterAgent:
         exposure_keywords = ["exposure", "assessment", "analyze exposure", "run analysis",
                             "exposure analysis", "exposure assessment", "assess exposure",
                             "clear steps", "select hazard", "select element"]
+
+        # UI Agent - Open panel, dropdown, expand/collapse chat (CHECK BEFORE MAP so "open pathfinder" -> ui_agent)
+        ui_agent_keywords = [
+            "expand atlas", "atlas full", "full screen", "fullscreen", "maximize chat", "expand chat",
+            "minimize chat", "collapse chat", "atlas chat bar", "chat bar to full", "chat to full",
+            "map style dropdown", "map style menu", "open map style", "show map style", "style dropdown",
+            "time of day dropdown", "lighting dropdown", "open time of day", "show time of day",
+            "add boundary panel", "boundary panel", "boundaries panel", "open boundary panel", "show the boundary panel",
+            "pathfinder panel", "open pathfinder", "show pathfinder", "route panel", "routing panel", "directions panel",
+            "layers panel", "open layers", "show layers", "layer panel",
+            "import panel", "import files", "upload panel", "open import", "show import", "add files panel",
+            "live hazard monitor", "hazard monitor", "open hazard monitor", "show hazard monitor",
+            "select maps", "open select maps", "show select maps",
+            "planning tools", "planning panel", "open planning", "show planning",
+            "assessment tools", "assessment panel", "open assessment", "show assessment",
+            "tool panel", "tools panel", "open tools", "show tools", "sidebar",
+        ]
+        if any(keyword in msg_lower for keyword in ui_agent_keywords) and not is_question:
+            print("Routing to: ui_agent (panel/UI control)")
+            return "ui_agent"
+
+        # Map history: undo / redo / reset — same controls as toolbar (handled by map_agent)
+        history_control_keywords = [
+            "undo", "redo", "map undo", "map redo", "reset map", "map reset", "global reset",
+            "clear the map", "clear map", "wipe map", "erase map", "revert last", "rollback",
+            "roll back", "ctrl+z", "ctrl z", "ctrl+y", "ctrl y", "history undo", "history redo",
+            "restore default map", "start over on the map", "reset the map", "clear entire map",
+        ]
+        if any(k in msg_lower for k in history_control_keywords) and not is_question:
+            print("Routing to: map_agent (map history: undo/redo/reset)")
+            return "map_agent"
         
         # Hazard Agent - Earthquake, weather, live hazards
         hazard_keywords = ["earthquake", "seismic", "weather", "temperature", "climate",
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
-        # Map Agent - Location, style, view, time of day, zoom, boundaries (ACTION keywords only)
-        map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate", 
+        # Map Agent - Location, style, view, time of day, zoom, boundaries (ACTION keywords only; panel/UI -> ui_agent)
+        map_action_keywords = ["show", "find", "go to", "navigate", "search", "where is", "locate",
                               "change to", "switch to", "set to", "use", "apply",
                               "zoom", "zoom in", "zoom out", "fly to", "take me to",
                               "time of day", "lighting", "morning", "daytime", "evening", "nighttime",
                               "i want to see", "want to see", "see", "display", "view",
                               "add boundary", "add boundaries", "add border", "add borders",
-                              "show boundary", "show boundaries",
-                              "clear boundary", "clear boundaries", "remove boundary", "remove boundaries"]
+                              "show boundary", "show boundaries", "display boundary", "display boundaries",
+                              "load boundary", "load boundaries", "put boundary", "put boundaries",
+                              "draw boundary", "draw boundaries", "open boundary", "open boundaries",
+                              "boundaries for", "borders for", "boundaries of", "borders of",
+                              "country boundary", "country boundaries", "national border", "national borders",
+                              "administrative boundary", "administrative boundaries",
+                              "by province", "by region", "province level", "regional boundary",
+                              "add boundaries to the map", "add boundaries to map",
+                              "clear boundary", "clear boundaries", "remove boundary", "remove boundaries",
+                              "then add", "now add", "next add", "also add", "after that add",
+                              "undo", "redo", "reset map", "clear map", "clear the map", "global reset"]
         
         # Check for layer panel commands (critical facility, hazard layers, etc.)
         layer_panel_keywords = ["open", "show", "display"]

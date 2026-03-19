@@ -1,5 +1,7 @@
 """Map agent for handling location, style, and view mode"""
 import json
+import re
+from typing import Optional
 from langchain_core.messages import AIMessage
 from state import AgentState
 from tools import search_location, change_map_style, switch_view_mode
@@ -141,22 +143,214 @@ class MapAgent:
         else:
             return "auto"
     
-    def _parse_boundary_intent(self, message: str) -> dict | None:
-        """Parse add boundary commands"""
-        msg_lower = message.lower()
-        
+    def _normalize_step_message(self, message: str) -> str:
+        """Extract the main intent from step-by-step prompts (e.g. 'then add Philippines boundaries' -> 'add Philippines boundaries')."""
+        msg_lower = message.lower().strip()
+        for prefix in ("then ", "now ", "next ", "after that ", "and then ", "and also ", "also "):
+            if msg_lower.startswith(prefix):
+                return msg_lower[len(prefix):].strip()
+        return msg_lower
+
+    def _parse_history_control_intent(self, message: str) -> Optional[dict]:
+        """
+        Undo / redo / reset map — rule-based so Atlas handles many phrasings without LLM drift.
+        Router should send map questions elsewhere; avoid matching 'don't undo' style negation.
+        """
+        raw = message.strip()
+        msg_lower = raw.lower()
+        nl = self._normalize_step_message(message).lower()
+        blob = f"{msg_lower} {nl}"
+
+        # Negations: user is refusing undo/redo, not requesting it
+        if re.search(r"\b(don't|do not|dont|never|without)\s+undo\b", blob):
+            return None
+        if re.search(r"\b(don't|do not|dont|never)\s+redo\b", blob):
+            return None
+
+        # --- Undo BEFORE redo so phrases like "undo the redo" prefer undo ---
+        undo_phrases = (
+            "undo that",
+            "undo the last",
+            "undo last",
+            "undo my last",
+            "undo it",
+            "please undo",
+            "can you undo",
+            "revert",
+            "revert that",
+            "revert last",
+            "revert the last",
+            "rollback",
+            "roll back",
+            "roll-back",
+            "take that back",
+            "go back one step",
+            "previous map state",
+            "last map state",
+            "step back",
+            "ctrl+z",
+            "ctrl z",
+            "control+z",
+            "control z",
+            "keyboard undo",
+            "history undo",
+            "map undo",
+            "undo the map",
+            "undo map change",
+        )
+        if any(p in blob for p in undo_phrases) or re.search(r"\bundo\b", msg_lower):
+            return {
+                "tool": "map_undo",
+                "requires_frontend": True,
+                "text": "Undoing the last map change.",
+            }
+
+        # --- Redo ---
+        redo_phrases = (
+            "redo that",
+            "redo the last",
+            "redo last",
+            "redo my last",
+            "redo it",
+            "please redo",
+            "can you redo",
+            "repeat the last action",
+            "repeat last action",
+            "restore what i undid",
+            "restore what i undone",
+            "bring that back",
+            "bring it back",
+            "go forward",
+            "step forward",
+            "ctrl+y",
+            "ctrl y",
+            "control+y",
+            "control y",
+            "keyboard redo",
+            "history redo",
+            "map redo",
+            "redo the map",
+            "redo map change",
+            "reapply",
+            "re-apply",
+        )
+        if any(p in blob for p in redo_phrases) or re.search(r"\bredo\b", msg_lower):
+            return {
+                "tool": "map_redo",
+                "requires_frontend": True,
+                "text": "Redoing the last undone map change.",
+            }
+
+        # --- Reset map (opens confirm modal by default; immediate skips modal) ---
+        reset_phrases = (
+            "reset map",
+            "reset the map",
+            "map reset",
+            "global reset",
+            "reset everything on the map",
+            "clear the map",
+            "clear map",
+            "clear entire map",
+            "wipe the map",
+            "wipe map",
+            "erase the map",
+            "erase map",
+            "empty the map",
+            "blank the map",
+            "start over on the map",
+            "start fresh on the map",
+            "fresh map",
+            "default map",
+            "restore default map",
+            "restore map to default",
+            "clear all map layers",
+            "remove everything from the map",
+            "remove all from the map",
+            "reset map view",
+            "reset the canvas",
+            "clear canvas",
+            "factory reset map",
+            "hard reset map",
+            "hit reset",
+            "press reset",
+            "click reset",
+            "use the reset button",
+            "tap reset",
+            "reset button",
+            "clear drawings",
+            "clear drawing on map",
+            "clear map content",
+        )
+        immediate_kw = (
+            "immediately",
+            "right away",
+            "without asking",
+            "without confirmation",
+            "skip confirmation",
+            "skip the dialog",
+            "skip dialog",
+            "no confirmation",
+            "don't ask",
+            "dont ask",
+            "do not ask",
+            "just reset",
+            "force reset",
+            "confirm reset for me",
+            "auto confirm",
+        )
+        has_reset_word = bool(re.search(r"\breset\b", msg_lower))
+        map_context = any(
+            w in blob
+            for w in (
+                "map",
+                "canvas",
+                "layer",
+                "layers",
+                "drawing",
+                "view",
+                "gis",
+                "simulation",
+            )
+        )
+        reset_hit = any(p in blob for p in reset_phrases) or (
+            has_reset_word and map_context
+        )
+        if reset_hit:
+            immediate = any(k in blob for k in immediate_kw)
+            if immediate:
+                txt = "Resetting the map now (clearing content and restoring default basemap)."
+            else:
+                txt = "Opening the map reset confirmation — confirm to clear the map and restore defaults."
+            return {
+                "tool": "map_reset",
+                "requires_frontend": True,
+                "immediate": immediate,
+                "text": txt,
+            }
+
+        return None
+
+    def _parse_boundary_intent(self, message: str) -> Optional[dict]:
+        """Parse add boundary commands. Supports step-by-step prompts and many phrasings."""
+        # Normalize step-by-step: "then add Philippines boundaries" -> "add Philippines boundaries"
+        msg_normalized = self._normalize_step_message(message)
+        msg_lower = msg_normalized.lower()
+
         # Extract parameters
         source = None
         country = None
         admin_level = None
-        
-        # Detect data source
-        if "geoboundaries" in msg_lower or "geo boundaries" in msg_lower:
-            source = "geoBoundaries"
-        elif "gadm" in msg_lower:
+
+        # Default source for Simulation-Studio is geoBoundaries (only supported source in UI)
+        source = "geoBoundaries"
+
+        # Override if user explicitly mentions another source (for future use)
+        if "gadm" in msg_lower:
             source = "GADM"
         elif "natural earth" in msg_lower or "naturalearth" in msg_lower:
             source = "Natural Earth"
+        elif "geoboundaries" in msg_lower or "geo boundaries" in msg_lower:
+            source = "geoBoundaries"
         
         # Detect country - common patterns
         country_patterns = {
@@ -184,7 +378,7 @@ class MapAgent:
             "brazil": "Brazil",
             "france": "France",
             "germany": "Germany",
-            "italy": "Italy",
+            "italy": "Italy", 
             "spain": "Spain",
         }
         
@@ -211,43 +405,53 @@ class MapAgent:
             if adm_match:
                 admin_level = int(adm_match.group(1))
         
-        # Map admin level descriptions to numbers
+        # Map admin level descriptions to numbers (admin 0 = country, 1 = state/province/region, etc.)
         level_descriptions = {
             "country": 0,
+            "national": 0,
             "province": 1,
+            "provinces": 1,
+            "provincial": 1,
             "region": 1,
+            "regions": 1,
+            "regional": 1,
             "state": 1,
+            "states": 1,
+            "admin level 1": 1,
+            "level 1": 1,
             "district": 2,
+            "districts": 2,
+            "admin level 2": 2,
+            "level 2": 2,
             "municipality": 3,
+            "municipalities": 3,
             "city": 3,
+            "cities": 3,
+            "admin level 3": 3,
+            "level 3": 3,
             "barangay": 4,
+            "admin level 4": 4,
+            "level 4": 4,
         }
-        
         if admin_level is None:
             for desc, level in level_descriptions.items():
                 if desc in msg_lower:
                     admin_level = level
                     break
         
-        # Build response
-        if source or country or admin_level is not None:
-            return {
-                "tool": "add_boundary",
-                "source": source,
-                "country": country,
-                "admin_level": admin_level,
-                "requires_frontend": True,
-                "text": f"Adding boundaries{f' from {source}' if source else ''}{f' for {country}' if country else ''}{f' at admin level {admin_level}' if admin_level is not None else ''}."
-            }
-        
-        # If no parameters detected, return a generic add boundary action
+        # Build response (source is always geoBoundaries by default)
         return {
             "tool": "add_boundary",
+            "source": source,
+            "country": country,
+            "admin_level": admin_level,
             "requires_frontend": True,
-            "text": "Opening the Add Boundaries panel. Please specify the data source, country, and admin level."
+            "text": f"Adding boundaries{f' for {country}' if country else ''}{f' at admin level {admin_level}' if admin_level is not None else ''}. Opening the Add Boundaries panel."
+            if (country or admin_level is not None)
+            else "Opening the Add Boundaries panel. Select a country and admin level (e.g. by province).",
         }
     
-    def _detect_ambiguous(self, message: str) -> dict | None:
+    def _detect_ambiguous(self, message: str) -> Optional[dict]:
         """Detect ambiguous map requests"""
         msg_lower = message.lower()
         
@@ -267,11 +471,16 @@ class MapAgent:
             }
         
         return None
-    
-    def _parse_intent(self, message: str, map_state: dict) -> dict | None:
+
+    def _parse_intent(self, message: str, map_state: dict) -> Optional[dict]:
         """Parse map intents using LLM for natural language understanding"""
         
         msg_lower = message.lower()
+
+        # Map history: undo / redo / reset (before boundary clear — different from "clear boundaries")
+        hc = self._parse_history_control_intent(message)
+        if hc:
+            return hc
         
         # IMPORTANT: Check for "clear boundaries" commands FIRST, before any LLM calls
         # This prevents the LLM from misinterpreting the command
@@ -286,7 +495,7 @@ class MapAgent:
                 "requires_frontend": True,
                 "text": "Clearing all boundaries from the map."
             }
-        
+
         # Check if this is an "open panel" command for layers
         open_keywords = ["open", "show", "display"]
         is_open_command = any(keyword in msg_lower for keyword in open_keywords)
@@ -303,12 +512,31 @@ class MapAgent:
                 "text": "Opening the Critical Facility Layers panel. You can now view and manage critical facility layers on the map."
             }
         
-        # Check for "add boundaries" commands
-        add_boundary_keywords = ["add boundary", "add boundaries", "add border", "add borders", "show boundary", "show boundaries"]
-        has_add_boundary = any(keyword in msg_lower for keyword in add_boundary_keywords)
-        
+        # Check for "add/show/display/load boundaries" commands (including step-by-step: "then add ...")
+        add_boundary_keywords = [
+            "add boundary", "add boundaries", "add border", "add borders",
+            "show boundary", "show boundaries", "show border", "show borders",
+            "display boundary", "display boundaries", "display border", "display borders",
+            "load boundary", "load boundaries", "load border", "load borders",
+            "put boundary", "put boundaries", "put border", "put borders",
+            "draw boundary", "draw boundaries", "open boundary", "open boundaries",
+            "add boundaries to the map", "add boundaries to map", "boundaries panel",
+            "boundaries for", "borders for", "boundaries of", "borders of",
+            "country boundary", "country boundaries", "national border", "national borders",
+            "administrative boundary", "administrative boundaries",
+            "by province", "by region", "by municipality", "province level", "regional boundary",
+        ]
+        # Use normalized message so "then add Philippines boundaries" is detected
+        msg_for_boundary = self._normalize_step_message(message)
+        msg_boundary_lower = msg_for_boundary.lower()
+        has_add_boundary = any(kw in msg_boundary_lower for kw in add_boundary_keywords)
+        # Also trigger if message clearly asks for boundaries of a place (e.g. "Philippines boundaries", "show me Japan's borders")
+        if not has_add_boundary and ("boundary" in msg_boundary_lower or "boundaries" in msg_boundary_lower or "border" in msg_boundary_lower or "borders" in msg_boundary_lower):
+            action_verbs = ["add", "show", "display", "load", "put", "draw", "open", "see", "view", "get", "want"]
+            if any(v in msg_boundary_lower for v in action_verbs) or "for " in msg_boundary_lower or " of " in msg_boundary_lower:
+                has_add_boundary = True
+
         if has_add_boundary:
-            # Parse boundary parameters
             boundary_action = self._parse_boundary_intent(message)
             if boundary_action:
                 return boundary_action
@@ -409,6 +637,10 @@ Available map actions:
    - Examples: "zoom out to max" → {"tool": "control_zoom", "direction": "out", "is_max": true}
    - Examples: "zoom in a bit" → {"tool": "control_zoom", "direction": "in", "amount": 0.5, "is_max": false}
 
+6. **map_undo** - Undo last map change (camera, layers, style, etc.)
+7. **map_redo** - Redo last undone change
+8. **map_reset** - Clear map / reset to default basemap. Set immediate: true only if user explicitly wants no confirmation dialog (e.g. "reset map immediately", "skip confirmation").
+
 Respond with JSON array of actions. Each action has: {"tool": "...", "param": "value"}
 
 Examples:
@@ -423,6 +655,10 @@ Examples:
 - "zoom in by 100%" → [{"tool": "control_zoom", "direction": "in", "is_max": true}]
 - "zoom to max" → [{"tool": "control_zoom", "direction": "in", "is_max": true}]
 - "zoom in a bit" → [{"tool": "control_zoom", "direction": "in", "amount": 0.5, "is_max": false}]
+- "undo" / "go back" (map) → [{"tool": "map_undo"}]
+- "redo" → [{"tool": "map_redo"}]
+- "reset the map" → [{"tool": "map_reset", "immediate": false}]
+- "reset map without asking" → [{"tool": "map_reset", "immediate": true}]
 
 Return ONLY the JSON array, no explanation."""
 
@@ -479,6 +715,17 @@ Return ONLY the JSON array, no explanation."""
                     amount = action.get("amount", 1.0)
                     is_max = action.get("is_max", False)
                     actions.append({"tool": "control_zoom", "direction": direction, "amount": amount, "is_max": is_max, "requires_frontend": True})
+                elif tool == "map_undo":
+                    actions.append({"tool": "map_undo", "requires_frontend": True, "text": "Undoing the last map change."})
+                elif tool == "map_redo":
+                    actions.append({"tool": "map_redo", "requires_frontend": True, "text": "Redoing the last undone map change."})
+                elif tool == "map_reset":
+                    actions.append({
+                        "tool": "map_reset",
+                        "requires_frontend": True,
+                        "immediate": bool(action.get("immediate", False)),
+                        "text": action.get("text") or "",
+                    })
             
             # Prioritize actions for best UX: style → view → time/other → location
             if len(actions) > 1:

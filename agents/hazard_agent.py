@@ -1,5 +1,6 @@
 """Hazard agent for handling earthquake and weather data"""
 import json
+from typing import Optional
 from langchain_core.messages import AIMessage
 from state import AgentState
 from tools import control_earthquake_data, control_weather_data
@@ -166,7 +167,7 @@ class HazardAgent:
         
         return state
     
-    def _parse_map_intent(self, message: str, map_state: dict = None) -> dict | None:
+    def _parse_map_intent(self, message: str, map_state: dict = None) -> Optional[dict]:
         """Parse map-related intents in hazard requests - returns action(s) or clarification"""
         msg_lower = message.lower()
         actions = []
@@ -269,7 +270,7 @@ class HazardAgent:
         
         return None
     
-    def _detect_ambiguous(self, message: str) -> dict | None:
+    def _detect_ambiguous(self, message: str) -> Optional[dict]:
         """Detect ambiguous hazard requests that need clarification"""
         msg_lower = message.lower()
         
@@ -317,7 +318,7 @@ class HazardAgent:
         
         return None
     
-    def _parse_intent(self, message: str) -> dict | None:
+    def _parse_intent(self, message: str) -> Optional[dict]:
         """Parse hazard monitoring intents using LLM for natural language understanding"""
         
         # Check if this is just an "open panel" command
