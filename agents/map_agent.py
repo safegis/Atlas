@@ -1,5 +1,6 @@
 """Map agent for handling location, style, and view mode"""
 import json
+import re
 from typing import Optional
 from langchain_core.messages import AIMessage
 from state import AgentState
@@ -150,6 +151,185 @@ class MapAgent:
                 return msg_lower[len(prefix):].strip()
         return msg_lower
 
+    def _parse_history_control_intent(self, message: str) -> Optional[dict]:
+        """
+        Undo / redo / reset map — rule-based so Atlas handles many phrasings without LLM drift.
+        Router should send map questions elsewhere; avoid matching 'don't undo' style negation.
+        """
+        raw = message.strip()
+        msg_lower = raw.lower()
+        nl = self._normalize_step_message(message).lower()
+        blob = f"{msg_lower} {nl}"
+
+        # Negations: user is refusing undo/redo, not requesting it
+        if re.search(r"\b(don't|do not|dont|never|without)\s+undo\b", blob):
+            return None
+        if re.search(r"\b(don't|do not|dont|never)\s+redo\b", blob):
+            return None
+
+        # --- Undo BEFORE redo so phrases like "undo the redo" prefer undo ---
+        undo_phrases = (
+            "undo that",
+            "undo the last",
+            "undo last",
+            "undo my last",
+            "undo it",
+            "please undo",
+            "can you undo",
+            "revert",
+            "revert that",
+            "revert last",
+            "revert the last",
+            "rollback",
+            "roll back",
+            "roll-back",
+            "take that back",
+            "go back one step",
+            "previous map state",
+            "last map state",
+            "step back",
+            "ctrl+z",
+            "ctrl z",
+            "control+z",
+            "control z",
+            "keyboard undo",
+            "history undo",
+            "map undo",
+            "undo the map",
+            "undo map change",
+        )
+        if any(p in blob for p in undo_phrases) or re.search(r"\bundo\b", msg_lower):
+            return {
+                "tool": "map_undo",
+                "requires_frontend": True,
+                "text": "Undoing the last map change.",
+            }
+
+        # --- Redo ---
+        redo_phrases = (
+            "redo that",
+            "redo the last",
+            "redo last",
+            "redo my last",
+            "redo it",
+            "please redo",
+            "can you redo",
+            "repeat the last action",
+            "repeat last action",
+            "restore what i undid",
+            "restore what i undone",
+            "bring that back",
+            "bring it back",
+            "go forward",
+            "step forward",
+            "ctrl+y",
+            "ctrl y",
+            "control+y",
+            "control y",
+            "keyboard redo",
+            "history redo",
+            "map redo",
+            "redo the map",
+            "redo map change",
+            "reapply",
+            "re-apply",
+        )
+        if any(p in blob for p in redo_phrases) or re.search(r"\bredo\b", msg_lower):
+            return {
+                "tool": "map_redo",
+                "requires_frontend": True,
+                "text": "Redoing the last undone map change.",
+            }
+
+        # --- Reset map (opens confirm modal by default; immediate skips modal) ---
+        reset_phrases = (
+            "reset map",
+            "reset the map",
+            "map reset",
+            "global reset",
+            "reset everything on the map",
+            "clear the map",
+            "clear map",
+            "clear entire map",
+            "wipe the map",
+            "wipe map",
+            "erase the map",
+            "erase map",
+            "empty the map",
+            "blank the map",
+            "start over on the map",
+            "start fresh on the map",
+            "fresh map",
+            "default map",
+            "restore default map",
+            "restore map to default",
+            "clear all map layers",
+            "remove everything from the map",
+            "remove all from the map",
+            "reset map view",
+            "reset the canvas",
+            "clear canvas",
+            "factory reset map",
+            "hard reset map",
+            "hit reset",
+            "press reset",
+            "click reset",
+            "use the reset button",
+            "tap reset",
+            "reset button",
+            "clear drawings",
+            "clear drawing on map",
+            "clear map content",
+        )
+        immediate_kw = (
+            "immediately",
+            "right away",
+            "without asking",
+            "without confirmation",
+            "skip confirmation",
+            "skip the dialog",
+            "skip dialog",
+            "no confirmation",
+            "don't ask",
+            "dont ask",
+            "do not ask",
+            "just reset",
+            "force reset",
+            "confirm reset for me",
+            "auto confirm",
+        )
+        has_reset_word = bool(re.search(r"\breset\b", msg_lower))
+        map_context = any(
+            w in blob
+            for w in (
+                "map",
+                "canvas",
+                "layer",
+                "layers",
+                "drawing",
+                "view",
+                "gis",
+                "simulation",
+            )
+        )
+        reset_hit = any(p in blob for p in reset_phrases) or (
+            has_reset_word and map_context
+        )
+        if reset_hit:
+            immediate = any(k in blob for k in immediate_kw)
+            if immediate:
+                txt = "Resetting the map now (clearing content and restoring default basemap)."
+            else:
+                txt = "Opening the map reset confirmation — confirm to clear the map and restore defaults."
+            return {
+                "tool": "map_reset",
+                "requires_frontend": True,
+                "immediate": immediate,
+                "text": txt,
+            }
+
+        return None
+
     def _parse_boundary_intent(self, message: str) -> Optional[dict]:
         """Parse add boundary commands. Supports step-by-step prompts and many phrasings."""
         # Normalize step-by-step: "then add Philippines boundaries" -> "add Philippines boundaries"
@@ -198,7 +378,7 @@ class MapAgent:
             "brazil": "Brazil",
             "france": "France",
             "germany": "Germany",
-            "italy": "Italy",
+            "italy": "Italy", 
             "spain": "Spain",
         }
         
@@ -296,6 +476,11 @@ class MapAgent:
         """Parse map intents using LLM for natural language understanding"""
         
         msg_lower = message.lower()
+
+        # Map history: undo / redo / reset (before boundary clear — different from "clear boundaries")
+        hc = self._parse_history_control_intent(message)
+        if hc:
+            return hc
         
         # IMPORTANT: Check for "clear boundaries" commands FIRST, before any LLM calls
         # This prevents the LLM from misinterpreting the command
@@ -452,6 +637,10 @@ Available map actions:
    - Examples: "zoom out to max" → {"tool": "control_zoom", "direction": "out", "is_max": true}
    - Examples: "zoom in a bit" → {"tool": "control_zoom", "direction": "in", "amount": 0.5, "is_max": false}
 
+6. **map_undo** - Undo last map change (camera, layers, style, etc.)
+7. **map_redo** - Redo last undone change
+8. **map_reset** - Clear map / reset to default basemap. Set immediate: true only if user explicitly wants no confirmation dialog (e.g. "reset map immediately", "skip confirmation").
+
 Respond with JSON array of actions. Each action has: {"tool": "...", "param": "value"}
 
 Examples:
@@ -466,6 +655,10 @@ Examples:
 - "zoom in by 100%" → [{"tool": "control_zoom", "direction": "in", "is_max": true}]
 - "zoom to max" → [{"tool": "control_zoom", "direction": "in", "is_max": true}]
 - "zoom in a bit" → [{"tool": "control_zoom", "direction": "in", "amount": 0.5, "is_max": false}]
+- "undo" / "go back" (map) → [{"tool": "map_undo"}]
+- "redo" → [{"tool": "map_redo"}]
+- "reset the map" → [{"tool": "map_reset", "immediate": false}]
+- "reset map without asking" → [{"tool": "map_reset", "immediate": true}]
 
 Return ONLY the JSON array, no explanation."""
 
@@ -522,6 +715,17 @@ Return ONLY the JSON array, no explanation."""
                     amount = action.get("amount", 1.0)
                     is_max = action.get("is_max", False)
                     actions.append({"tool": "control_zoom", "direction": direction, "amount": amount, "is_max": is_max, "requires_frontend": True})
+                elif tool == "map_undo":
+                    actions.append({"tool": "map_undo", "requires_frontend": True, "text": "Undoing the last map change."})
+                elif tool == "map_redo":
+                    actions.append({"tool": "map_redo", "requires_frontend": True, "text": "Redoing the last undone map change."})
+                elif tool == "map_reset":
+                    actions.append({
+                        "tool": "map_reset",
+                        "requires_frontend": True,
+                        "immediate": bool(action.get("immediate", False)),
+                        "text": action.get("text") or "",
+                    })
             
             # Prioritize actions for best UX: style → view → time/other → location
             if len(actions) > 1:

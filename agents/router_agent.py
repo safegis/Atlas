@@ -186,6 +186,17 @@ class RouterAgent:
         if any(keyword in msg_lower for keyword in ui_agent_keywords) and not is_question:
             print("Routing to: ui_agent (panel/UI control)")
             return "ui_agent"
+
+        # Map history: undo / redo / reset — same controls as toolbar (handled by map_agent)
+        history_control_keywords = [
+            "undo", "redo", "map undo", "map redo", "reset map", "map reset", "global reset",
+            "clear the map", "clear map", "wipe map", "erase map", "revert last", "rollback",
+            "roll back", "ctrl+z", "ctrl z", "ctrl+y", "ctrl y", "history undo", "history redo",
+            "restore default map", "start over on the map", "reset the map", "clear entire map",
+        ]
+        if any(k in msg_lower for k in history_control_keywords) and not is_question:
+            print("Routing to: map_agent (map history: undo/redo/reset)")
+            return "map_agent"
         
         # Hazard Agent - Earthquake, weather, live hazards
         hazard_keywords = ["earthquake", "seismic", "weather", "temperature", "climate",
@@ -208,7 +219,8 @@ class RouterAgent:
                               "by province", "by region", "province level", "regional boundary",
                               "add boundaries to the map", "add boundaries to map",
                               "clear boundary", "clear boundaries", "remove boundary", "remove boundaries",
-                              "then add", "now add", "next add", "also add", "after that add"]
+                              "then add", "now add", "next add", "also add", "after that add",
+                              "undo", "redo", "reset map", "clear map", "clear the map", "global reset"]
         
         # Check for layer panel commands (critical facility, hazard layers, etc.)
         layer_panel_keywords = ["open", "show", "display"]
