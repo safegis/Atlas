@@ -4,6 +4,23 @@
 
 ### 🧐 I. Overview
 
+### Run Atlas (development)
+
+From the directory that contains `Atlas` (e.g. the SafeGIS repo root):
+
+```bash
+cd Atlas
+.venv/bin/python main.py
+```
+
+If you don’t have a venv yet (from `Atlas/`):
+
+```bash
+python -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+Copy `.env.example` to `.env` and configure as needed before running.
+
 ### RAG (Qdrant + Ollama embeddings)
 
 Atlas retrieves **grounded excerpts** for the **QA agent** when `QDRANT_URL` is set in `.env`.
