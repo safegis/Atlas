@@ -29,15 +29,55 @@ class MapAgent:
         # If so, route to HazardAgent instead
         msg_lower = last_message.lower()
         has_earthquake = any(word in msg_lower for word in ["earthquake", "seismic", "quake"])
-        has_earthquake_source = any(word in msg_lower for word in ["global", "usgs", "philippine", "philippines", "phivolcs"])
+        has_earthquake_source = any(
+            word in msg_lower
+            for word in [
+                "global",
+                "usgs",
+                "philippine",
+                "philippines",
+                "phivolcs",
+                "worldwide",
+                "world",
+                "both",
+                "all",
+            ]
+        )
         
         if has_earthquake and not has_earthquake_source:
-            # Earthquake mentioned without source - let HazardAgent handle clarification
-            print("Earthquake without source detected - routing to HazardAgent")
-            # Don't process here, return state unchanged to let router send to HazardAgent
-            # But we need to signal this somehow... Actually, the router should handle this
-            # For now, just don't handle it in MapAgent
-            pass
+            # Never run location LLM on "earthquake" — it returns search_location("earthquake").
+            print(
+                "Earthquake without source — hazard clarification (skipping map location LLM)"
+            )
+            ambiguous_eq = {
+                "type": "clarification",
+                "question": "I found 2 earthquake data sources. Which one would you like to see?",
+                "options": [
+                    "Philippines - Latest earthquake data from PHIVOLCS (Philippine Institute of Volcanology and Seismology)",
+                    "Global - Worldwide earthquake data from USGS (U.S. Geological Survey)",
+                    "Both - Show both Philippine and Global earthquake data",
+                ],
+                "suggested_action": {
+                    "tool": "control_earthquake_data",
+                    "action": "enable",
+                    "source": "philippine",
+                },
+            }
+            state["clarification_needed"] = True
+            state["pending_action"] = ambiguous_eq
+            state["messages"].append(
+                AIMessage(
+                    content=json.dumps(
+                        {
+                            "type": "clarification",
+                            "question": ambiguous_eq["question"],
+                            "options": ambiguous_eq["options"],
+                            "suggested_action": ambiguous_eq["suggested_action"],
+                        }
+                    )
+                )
+            )
+            return state
         
         # Detect ambiguous patterns
         ambiguous = self._detect_ambiguous(last_message)

@@ -1,7 +1,10 @@
 """Hazard agent for handling earthquake and weather data"""
 import json
-from typing import Optional
+from typing import Any, Optional
+
 from langchain_core.messages import AIMessage
+
+from agents.router_agent import _is_affirmation, _prev_qa_offered_map_hazard_demo
 from state import AgentState
 from tools import control_earthquake_data, control_weather_data
 
@@ -13,11 +16,70 @@ class HazardAgent:
         self.llm = llm
         self.tools = [control_earthquake_data, control_weather_data]
         # Hazard agent uses rule-based intent parsing, not LLM prompts
-    
+
+    @staticmethod
+    def _last_assistant_json_payload(messages: list) -> Optional[dict[str, Any]]:
+        """Most recent assistant message parsed as JSON (QA / clarification cards)."""
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            content = None
+            msg_type = None
+            if hasattr(msg, "content"):
+                content = msg.content
+                msg_type = getattr(msg, "type", None)
+            elif isinstance(msg, dict):
+                content = msg.get("content")
+                msg_type = msg.get("role")
+            if msg_type not in ("ai", "assistant") or not content:
+                continue
+            try:
+                return json.loads(content)
+            except Exception:
+                continue
+        return None
+
+    def _expand_affirmation_after_qa_demo(self, messages: list) -> Optional[str]:
+        """Turn 'yes' after a QA earthquake/weather demo offer into an explicit enable command."""
+        if len(messages) < 2:
+            return None
+        raw_last = messages[-1].content if hasattr(messages[-1], "content") else ""
+        if not isinstance(raw_last, str) or not _is_affirmation(raw_last.lower()):
+            return None
+        prev = self._last_assistant_json_payload(messages[:-1])
+        if not prev or not _prev_qa_offered_map_hazard_demo(prev):
+            return None
+        text = prev.get("text")
+        if not isinstance(text, str):
+            return None
+        # Model sometimes double-encodes JSON inside "text"
+        if text.strip().startswith("{"):
+            try:
+                inner = json.loads(text)
+                if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+                    text = inner["text"]
+            except Exception:
+                pass
+        tl = text.lower()
+        if "weather" in tl and not any(
+            x in tl for x in ("earthquake", "quake", "phivolcs", "usgs", "seismic")
+        ):
+            return "enable weather data for the Philippines"
+        if "phivolcs" in tl or (
+            "philippine" in tl and ("earthquake" in tl or "quake" in tl)
+        ):
+            return "enable philippine earthquake data from PHIVOLCS"
+        if "usgs" in tl or ("global" in tl and "earthquake" in tl):
+            return "enable global earthquake data from USGS"
+        return "enable earthquake data"
+
     def process(self, state: AgentState) -> AgentState:
         """Process hazard monitoring requests"""
         messages = state["messages"]
         last_message = messages[-1].content
+        expanded = self._expand_affirmation_after_qa_demo(messages)
+        if expanded:
+            print(f"Hazard Agent: affirmation expanded to hazard command: {expanded!r}")
+            last_message = expanded
         map_state = state.get("map_state", {})
         
         print(f"Hazard Agent processing: {last_message}")
@@ -91,7 +153,8 @@ class HazardAgent:
             
             # If there are map actions (not clarifications), store them as pending
             if map_action and map_action.get("type") != "clarification":
-                clarification_response["pending_map_action"] = map_action
+                if self._should_chain_map_with_hazard_clarification(map_action):
+                    clarification_response["pending_map_action"] = map_action
             
             state["messages"].append(AIMessage(content=json.dumps(clarification_response)))
             return state
@@ -166,6 +229,34 @@ class HazardAgent:
             ))
         
         return state
+
+    @staticmethod
+    def _should_chain_map_with_hazard_clarification(map_action: dict) -> bool:
+        """Avoid chaining bogus search_location(earthquake...) onto earthquake source clarifications."""
+        if not isinstance(map_action, dict):
+            return True
+        bad_q = (
+            "earthquake",
+            "seismic",
+            "quake",
+            "hazard",
+            "phivolcs",
+            "usgs",
+        )
+
+        def _bad_search(d: dict) -> bool:
+            if d.get("tool") != "search_location":
+                return False
+            q = (d.get("query") or "").lower()
+            return any(w in q for w in bad_q)
+
+        if map_action.get("multiple_actions"):
+            return not any(
+                _bad_search(a) for a in map_action["multiple_actions"] if isinstance(a, dict)
+            )
+        if _bad_search(map_action):
+            return False
+        return True
     
     def _parse_map_intent(self, message: str, map_state: dict = None) -> Optional[dict]:
         """Parse map-related intents in hazard requests - returns action(s) or clarification"""
@@ -177,9 +268,13 @@ class HazardAgent:
         # Check for location search keywords
         location_keywords = ["show", "go to", "fly to", "fly the map to", "navigate to", "zoom to", "zoom the map to", "search for", "find", "locate"]
         has_location_request = any(keyword in msg_lower for keyword in location_keywords)
+        # "show ... earthquake ... on the map" is hazard wording, not search_location("earthquake")
+        hazard_location_false_positive = any(
+            w in msg_lower for w in ("earthquake", "seismic", "quake", "phivolcs", "usgs")
+        )
         
         # If location request detected, extract the location query
-        if has_location_request:
+        if has_location_request and not hazard_location_false_positive:
             # Try to extract location from common patterns
             for keyword in location_keywords:
                 if keyword in msg_lower:
@@ -194,7 +289,10 @@ class HazardAgent:
                         location_part = location_part.split(" then")[0].strip()
                         location_part = location_part.split(" and ")[0].strip()
                         
-                        if location_part:
+                        if location_part and not any(
+                            w in location_part
+                            for w in ("earthquake", "seismic", "quake", "hazard", "phivolcs", "usgs")
+                        ):
                             actions.append({"tool": "search_location", "query": location_part, "requires_frontend": True})
                             break
         

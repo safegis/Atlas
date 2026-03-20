@@ -27,5 +27,12 @@ exa-py>=1.0.0
 # Environment variables
 python-dotenv>=1.0.0
 
+# Qdrant vector DB (RAG)
+qdrant-client>=1.12.0
+# RAG ingest: PDF + image OCR (Tesseract must be installed on the host for OCR)
+pypdf>=4.0.0
+Pillow>=10.0.0
+pytesseract>=0.3.10
+
 # Optional: For better audio processing
 # ffmpeg-python>=0.2.0

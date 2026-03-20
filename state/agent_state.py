@@ -15,3 +15,5 @@ class AgentState(TypedDict):
     pending_action: Optional[dict]
     web_search_enabled: bool
     uploaded_files: list  # List of uploaded file names for exposure assessment
+    # User-connected spatial layers (API / PostGIS / file / MCP-style URL) from Simulation Studio
+    spatial_context: list
