@@ -3,7 +3,7 @@ SafeGIS AI Backend - LangGraph Multi-Agent System
 FastAPI server with LangGraph orchestration
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, WebSocket, WebSocketDisconnect, Response
+from fastapi import FastAPI, File, UploadFile, HTTPException, WebSocket, WebSocketDisconnect, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -19,6 +19,7 @@ load_dotenv(".env.local")
 
 from graph import create_agent_graph, process_message
 from utils import OllamaWrapper
+from rag import build_rag_retriever_if_configured
 
 # ============================================================================
 # APP INITIALIZATION
@@ -47,9 +48,16 @@ llm = None  # No GGUF; health check uses agent_graph
 # Exa.ai API key for web search
 EXA_API_KEY = os.getenv("EXA_API_KEY")
 
+# Optional: Qdrant + Ollama embeddings for RAG (QA agent)
+RAG_RETRIEVER = build_rag_retriever_if_configured()
+
 # Create LangGraph agent system
 print("Creating LangGraph agent system...")
-agent_graph = create_agent_graph(llm_wrapper=llm_wrapper, exa_api_key=EXA_API_KEY)
+agent_graph = create_agent_graph(
+    llm_wrapper=llm_wrapper,
+    exa_api_key=EXA_API_KEY,
+    rag_retriever=RAG_RETRIEVER,
+)
 print("Agent system ready!")
 
 # ============================================================================
@@ -62,12 +70,25 @@ class ChatRequest(BaseModel):
     map_state: Optional[dict] = None
     web_search_enabled: Optional[bool] = False
     uploaded_files: Optional[List[str]] = None
+    # Rich layer list from Simulation Studio: { "name", "layerName", "sourceType"? }
+    spatial_context: Optional[List[dict]] = None
 
 class ChatResponse(BaseModel):
     response: dict
     requires_frontend: bool
     requires_clarification: bool = False
     conversation_history: List[dict]
+
+
+# --- RAG (ingest / status) ---
+class RAGIngestTextRequest(BaseModel):
+    text: str
+    source_id: str
+    metadata: Optional[dict] = None
+
+
+MAX_RAG_TEXT_CHARS = 1_500_000
+MAX_RAG_FILE_BYTES = 5_000_000
 
 # ElevenLabs API key for real-time speech-to-text and TTS (keep server-side only)
 ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
@@ -85,7 +106,17 @@ def root():
         "message": "SafeGIS AI Backend - LangGraph Multi-Agent System",
         "version": "2.0.0",
         "system": "LangGraph",
-        "agents": ["router", "map_agent", "hazard_agent", "qa_agent", "clarification_agent"]
+        "agents": [
+            "router",
+            "map_agent",
+            "hazard_agent",
+            "qa_agent",
+            "clarification_agent",
+            "spatial_data_agent",
+            "pathfinder_agent",
+            "ui_agent",
+            "exposure_assessment_agent",
+        ]
     }
 
 @app.get("/health")
@@ -95,7 +126,8 @@ def health_check():
         "message": "SafeGIS AI Backend is running",
         "llm_loaded": agent_graph is not None,
         "agent_graph_loaded": agent_graph is not None,
-        "system": "LangGraph Multi-Agent"
+        "system": "LangGraph Multi-Agent",
+        "rag_enabled": RAG_RETRIEVER is not None,
     }
 
 @app.post("/chat", response_model=ChatResponse)
@@ -118,7 +150,8 @@ async def chat(request: ChatRequest):
             request.conversation_history,
             request.map_state,
             request.web_search_enabled,
-            request.uploaded_files
+            request.uploaded_files,
+            request.spatial_context,
         )
         
         # Format conversation history safely
@@ -142,6 +175,123 @@ async def chat(request: ChatRequest):
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/rag/status")
+def rag_status():
+    """Qdrant + embedding model configuration (no secrets)."""
+    from rag.store import collection_info, default_collection_name, get_qdrant_client
+
+    if RAG_RETRIEVER is None:
+        return {
+            "enabled": False,
+            "reason": "Set QDRANT_URL (and QDRANT_API_KEY for cloud) or fix init errors; optional RAG_ENABLED=false to skip.",
+            "embed_model": os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+            "ollama_host": os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+        }
+    c = get_qdrant_client()
+    name = default_collection_name()
+    info = collection_info(c, name) if c else {"exists": False}
+    resolved_vec = None
+    try:
+        from rag.store import resolve_vector_name
+
+        if c:
+            resolved_vec = resolve_vector_name(c, name)
+    except Exception:
+        pass
+    return {
+        "enabled": True,
+        "collection": name,
+        "embed_model": os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+        "ollama_host": os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+        "top_k": int(os.getenv("RAG_TOP_K", "5")),
+        "qdrant": info,
+        "qdrant_vector_field": resolved_vec,
+        "qdrant_vector_env": (os.getenv("QDRANT_VECTOR_NAME") or "").strip() or None,
+    }
+
+
+@app.get("/rag/preview")
+def rag_preview(query: str = Query(..., min_length=1, description="Test retrieval; no LLM")):
+    """Return raw Qdrant hits for debugging (embed query + vector search)."""
+    if RAG_RETRIEVER is None:
+        raise HTTPException(status_code=503, detail="RAG not configured")
+    q = query.strip()
+    try:
+        hits = RAG_RETRIEVER.retrieve(q)
+        return {
+            "query": q,
+            "hit_count": len(hits),
+            "hits": [
+                {
+                    "score": h.get("score"),
+                    "source_id": h.get("source_id"),
+                    "text_preview": (h.get("text") or "")[:400],
+                }
+                for h in hits
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rag/ingest-text")
+def rag_ingest_text(body: RAGIngestTextRequest):
+    """Chunk, embed (Ollama), and upsert into Qdrant."""
+    if RAG_RETRIEVER is None:
+        raise HTTPException(status_code=503, detail="RAG not configured (see /rag/status)")
+    if not body.text or not body.text.strip():
+        raise HTTPException(status_code=400, detail="text is required")
+    if len(body.text) > MAX_RAG_TEXT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"text too large (max {MAX_RAG_TEXT_CHARS} characters)",
+        )
+    sid = (body.source_id or "anonymous").strip()
+    try:
+        result = RAG_RETRIEVER.ingest_text(
+            body.text, sid, metadata=body.metadata or None
+        )
+        return {"ok": True, **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rag/ingest-file")
+async def rag_ingest_file(
+    file: UploadFile = File(...),
+    source_id: Optional[str] = Query(None, description="Logical document id; defaults to filename"),
+):
+    """Upload text, Markdown, PDF, or image (OCR) and ingest into Qdrant."""
+    if RAG_RETRIEVER is None:
+        raise HTTPException(status_code=503, detail="RAG not configured (see /rag/status)")
+    raw = await file.read()
+    if len(raw) > MAX_RAG_FILE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"file too large (max {MAX_RAG_FILE_BYTES} bytes)",
+        )
+    from rag.file_extract import extract_text_from_upload
+
+    fname = (file.filename or "upload").strip()
+    try:
+        text, extract_meta = extract_text_from_upload(fname, raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    sid = (source_id or fname or "upload").strip()
+    meta = {"filename": fname, **extract_meta}
+    try:
+        result = RAG_RETRIEVER.ingest_text(
+            text,
+            sid,
+            metadata=meta,
+        )
+        return {"ok": True, **result, "extraction": extract_meta}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @app.websocket("/transcribe-ws")
 async def transcribe_ws(websocket: WebSocket):

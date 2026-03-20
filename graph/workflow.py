@@ -1,15 +1,17 @@
 """LangGraph workflow creation and message processing"""
 import json
+import re
+
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
 from state import AgentState
-from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent, ExposureAssessmentAgent, PathfinderAgent, UIControlAgent
+from agents import RouterAgent, MapAgent, HazardAgent, QAAgent, ClarificationAgent, WebSearchAgent, ExposureAssessmentAgent, PathfinderAgent, UIControlAgent, SpatialDataAgent
 from utils import LlamaCppWrapper
 import os
 
 
-def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
+def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None, rag_retriever=None):
     """Create the LangGraph multi-agent system.
     Pass either llm (for llama-cpp GGUF) or llm_wrapper (e.g. OllamaWrapper for Ollama).
     """
@@ -24,11 +26,12 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
     router = RouterAgent(wrapped_llm)
     map_agent = MapAgent(wrapped_llm)
     hazard_agent = HazardAgent(wrapped_llm)
-    qa_agent = QAAgent(wrapped_llm)
+    qa_agent = QAAgent(wrapped_llm, rag_retriever=rag_retriever)
     clarification_agent = ClarificationAgent()
     exposure_agent = ExposureAssessmentAgent(wrapped_llm)
     pathfinder_agent = PathfinderAgent(wrapped_llm)
     ui_agent = UIControlAgent(wrapped_llm)
+    spatial_data_agent = SpatialDataAgent(wrapped_llm)
 
     # Initialize web search agent if API key provided
     web_search_agent = None
@@ -39,7 +42,8 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
     workflow = StateGraph(AgentState)
     
     # Add nodes
-    workflow.add_node("router", lambda state: {**state, "current_agent": router.route(state)})
+    # Only return deltas — do not spread full state (would re-submit `messages` and duplicate with operator.add)
+    workflow.add_node("router", lambda state: {"current_agent": router.route(state)})
     workflow.add_node("map_agent", map_agent.process)
     workflow.add_node("hazard_agent", hazard_agent.process)
     workflow.add_node("qa_agent", qa_agent.process)
@@ -47,6 +51,7 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
     workflow.add_node("exposure_assessment_agent", exposure_agent.process)
     workflow.add_node("pathfinder_agent", pathfinder_agent.process)
     workflow.add_node("ui_agent", ui_agent.process)
+    workflow.add_node("spatial_data_agent", spatial_data_agent.process)
 
     # Add web search node if available
     if web_search_agent:
@@ -69,6 +74,7 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
         "exposure_assessment_agent": "exposure_assessment_agent",
         "pathfinder_agent": "pathfinder_agent",
         "ui_agent": "ui_agent",
+        "spatial_data_agent": "spatial_data_agent",
     }
     
     # Add web search routing if available
@@ -89,6 +95,7 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
     workflow.add_edge("exposure_assessment_agent", END)
     workflow.add_edge("pathfinder_agent", END)
     workflow.add_edge("ui_agent", END)
+    workflow.add_edge("spatial_data_agent", END)
 
     # Add web search edge if available
     if web_search_agent:
@@ -97,7 +104,7 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None):
     return workflow.compile()
 
 
-def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False, uploaded_files: list = None) -> dict:
+def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False, uploaded_files: list = None, spatial_context: list = None) -> dict:
     """
     Process a user message through the agent graph
     
@@ -134,8 +141,22 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         # Only look for pending actions if the last message looks like a clarification response
         # This prevents old clarifications from interfering with new requests
         # Don't treat it as clarification if it has action keywords like "show", "enable", "disable", etc.
-        action_keywords = ["show", "enable", "disable", "turn on", "turn off", "activate", "deactivate", 
-                          "hide", "remove", "display", "view", "see", "now", "also"]
+        # Short tokens like "now" / "also" match normal continuations ("Now for the exposure…", "Also use…")
+        # and wrongly block restoring pending_action — keep multi-word phrases where needed.
+        action_keywords = [
+            "show",
+            "enable",
+            "disable",
+            "turn on",
+            "turn off",
+            "activate",
+            "deactivate",
+            "hide",
+            "remove",
+            "display",
+            "view",
+            "see",
+        ]
         
         potential_responses = ["yes", "yeah", "yep", "sure", "ok", "okay", "no", "nope", "nah", "cancel",
                               "philippines", "philippine", "phivolcs", "local", 
@@ -156,6 +177,18 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         
         # Check if message contains action keywords - if so, it's a new request, not a clarification response
         has_action_keyword = any(keyword in msg_lower for keyword in action_keywords)
+        # "Show both" / "Display global" answer a clarification; "show" must not block pending_action restore
+        if has_action_keyword and re.match(
+            r"^\s*(show|display)\s+(both|all|global|philippines?|phivolcs|usgs|worldwide|world)(\s+please)?\s*\.?\s*$",
+            msg_lower,
+        ):
+            has_action_keyword = False
+        # "Show available layers" / list-style layer requests (not a location search)
+        if has_action_keyword and re.match(
+            r"^\s*(show|display|list|open)\s+.*\blayers?\b",
+            msg_lower,
+        ):
+            has_action_keyword = False
         
         # Check if message contains file references (for exposure assessment clarifications)
         has_file_reference = any(ext in msg_lower for ext in [".geojson", ".shp", ".kml", ".gpkg", ".json", ".csv"])
@@ -197,7 +230,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
             "clarification_needed": clarification_needed,
             "pending_action": pending_action,
             "web_search_enabled": web_search_flag,
-            "uploaded_files": uploaded_files or []
+            "uploaded_files": uploaded_files or [],
+            "spatial_context": spatial_context or []
         }
         
         print(f"Initial state created with {len(messages)} messages")

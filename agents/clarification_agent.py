@@ -11,6 +11,19 @@ class ClarificationAgent:
         """Process clarification responses"""
         messages = state["messages"]
         last_message = messages[-1].content.lower().strip()
+        # "Show both" / "Display PHIVOLCS" etc. — strip common prefixes for option matching
+        option_norm = last_message
+        for prefix in (
+            "show ",
+            "display ",
+            "i want ",
+            "pick ",
+            "select ",
+            "choose ",
+            "use ",
+        ):
+            if option_norm.startswith(prefix):
+                option_norm = option_norm[len(prefix) :].strip()
         pending_action = state.get("pending_action")
         
         print(f"Clarification Agent processing: {last_message}")
@@ -121,7 +134,12 @@ class ClarificationAgent:
         
         # Check for earthquake source selection
         # Option 1: Philippines
-        if last_message in ["philippines", "philippine", "phivolcs", "local", "1"] or last_message.startswith("philippines"):
+        if (
+            option_norm in ["philippines", "philippine", "phivolcs", "local", "1"]
+            or option_norm.startswith("philippines")
+            or last_message in ["philippines", "philippine", "phivolcs", "local", "1"]
+            or last_message.startswith("philippines")
+        ):
             suggested = pending_action.get("suggested_action", {})
             if suggested.get("tool") == "control_earthquake_data":
                 action = {"tool": "control_earthquake_data", "action": "enable", "source": "philippine", "requires_frontend": True}
@@ -140,7 +158,12 @@ class ClarificationAgent:
                 return state
         
         # Option 2: Global
-        if last_message in ["global", "usgs", "worldwide", "world", "2"] or last_message.startswith("global"):
+        if (
+            option_norm in ["global", "usgs", "worldwide", "world", "2"]
+            or option_norm.startswith("global")
+            or last_message in ["global", "usgs", "worldwide", "world", "2"]
+            or last_message.startswith("global")
+        ):
             suggested = pending_action.get("suggested_action", {})
             if suggested.get("tool") == "control_earthquake_data":
                 action = {"tool": "control_earthquake_data", "action": "enable", "source": "global", "requires_frontend": True}
@@ -159,7 +182,12 @@ class ClarificationAgent:
                 return state
         
         # Option 3: Both
-        if last_message in ["both", "all", "3"] or last_message.startswith("both"):
+        if (
+            option_norm in ["both", "all", "3"]
+            or option_norm.startswith("both")
+            or last_message in ["both", "all", "3"]
+            or last_message.startswith("both")
+        ):
             suggested = pending_action.get("suggested_action", {})
             if suggested.get("tool") == "control_earthquake_data":
                 # Enable both sources

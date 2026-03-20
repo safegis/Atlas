@@ -8,6 +8,7 @@ from .web_search_agent import WebSearchAgent
 from .exposure_assessment_agent import ExposureAssessmentAgent
 from .pathfinder_agent import PathfinderAgent
 from .ui_control_agent import UIControlAgent
+from .spatial_data_agent import SpatialDataAgent
 
 __all__ = [
     "RouterAgent",
@@ -19,4 +20,5 @@ __all__ = [
     "ExposureAssessmentAgent",
     "PathfinderAgent",
     "UIControlAgent",
+    "SpatialDataAgent",
 ]

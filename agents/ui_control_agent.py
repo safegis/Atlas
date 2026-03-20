@@ -162,6 +162,12 @@ class UIControlAgent:
                 "critical facility layers",
                 "open layers",
                 "show layers",
+                "available layers",
+                "list layers",
+                "list my layers",
+                "what layers",
+                "which layers",
+                "map layers",
                 "geological hazards panel",
             ]
         ):
@@ -192,27 +198,57 @@ class UIControlAgent:
                 "tool": "open_panel",
                 "panel": "import_files_panel",
                 "requires_frontend": True,
-                "text": "Opening the file import panel.",
+                "text": "Opening Import / connect spatial data.",
             }
 
-        # Live hazard monitor
-        if any(
+        # Live hazard monitor — check close/hide *before* open (same phrases match both)
+        mentions_live_hazard_ui = any(
             phrase in msg_lower
             for phrase in [
                 "live hazard monitor",
                 "hazard monitor",
                 "live hazards",
-                "open hazard monitor",
-                "show hazard monitor",
                 "earthquake and weather panel",
             ]
-        ):
-            return {
-                "tool": "open_panel",
-                "panel": "live_hazard_monitor",
-                "requires_frontend": True,
-                "text": "Opening the Live Hazard Monitor panel.",
-            }
+        )
+        if mentions_live_hazard_ui:
+            close_hazard_ui = any(
+                w in msg_lower
+                for w in [
+                    "close",
+                    "hide",
+                    "dismiss",
+                    "shut",
+                    "exit",
+                    "collapse",
+                    "minimize",
+                ]
+            ) or ("turn" in msg_lower and "off" in msg_lower)
+            if close_hazard_ui:
+                return {
+                    "tool": "close_panel",
+                    "panel": "live_hazard_monitor",
+                    "requires_frontend": True,
+                    "text": "Closing the Live Hazard Monitor panel.",
+                }
+            if any(
+                phrase in msg_lower
+                for phrase in [
+                    "open hazard monitor",
+                    "show hazard monitor",
+                    "live hazard monitor",
+                    "hazard monitor",
+                    "live hazards",
+                    "earthquake and weather panel",
+                ]
+            ):
+                return {
+                    "tool": "open_panel",
+                    "panel": "live_hazard_monitor",
+                    "requires_frontend": True,
+                    "text": "Opening the Live Hazard Monitor panel.",
+                }
+
 
         # Select maps
         if any(
