@@ -286,14 +286,13 @@ class UIControlAgent:
                 "text": "Opening the Planning Tools panel.",
             }
 
-        # Assessment tools (exposure, vulnerability)
+        # Assessment tools
         if any(
             phrase in msg_lower
             for phrase in [
                 "assessment tools",
                 "assessment panel",
                 "exposure panel",
-                "vulnerability panel",
                 "open assessment",
                 "show assessment",
                 "exposure assessment panel",
