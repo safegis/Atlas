@@ -17,3 +17,5 @@ class AgentState(TypedDict):
     uploaded_files: list  # List of uploaded file names for exposure assessment
     # User-connected spatial layers (API / PostGIS / file / MCP-style URL) from Simulation Studio
     spatial_context: list
+    # UUID from Simulation Studio / Supabase; scopes vector RAG to this thread only
+    conversation_id: Optional[str]

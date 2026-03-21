@@ -120,11 +120,14 @@ Do not generate code or scripts.
 If asked about unrelated topics, politely redirect to your expertise in GIS and disaster management."""
 
         last_query = self._last_human_content(messages)
+        conv_id = state.get("conversation_id")
         rag_sources: list[dict] = []
         rag_context = ""
         if self.rag_retriever and last_query.strip():
             try:
-                hits = self.rag_retriever.retrieve(last_query.strip())
+                hits = self.rag_retriever.retrieve(
+                    last_query.strip(), conversation_id=conv_id
+                )
                 print(f"QA RAG: {len(hits)} hit(s) for query preview={last_query.strip()[:80]!r}")
                 rag_context = self.rag_retriever.format_context(hits)
                 rag_sources = [

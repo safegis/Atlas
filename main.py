@@ -72,6 +72,8 @@ class ChatRequest(BaseModel):
     uploaded_files: Optional[List[str]] = None
     # Rich layer list from Simulation Studio: { "name", "layerName", "sourceType"? }
     spatial_context: Optional[List[dict]] = None
+    # Supabase thread id from Simulation Studio — scopes vector RAG memory to this conversation only
+    conversation_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     response: dict
@@ -89,6 +91,43 @@ class RAGIngestTextRequest(BaseModel):
 
 MAX_RAG_TEXT_CHARS = 1_500_000
 MAX_RAG_FILE_BYTES = 5_000_000
+
+
+def _assistant_content_to_plain(content: str) -> str:
+    """Best-effort plain text from last AI message (JSON wrapper or raw)."""
+    if not content:
+        return ""
+    t = content.strip()
+    if t.startswith("{"):
+        try:
+            obj = json.loads(t)
+            if isinstance(obj, dict):
+                inner = obj.get("text")
+                if isinstance(inner, str) and inner.strip():
+                    return inner.strip()
+        except json.JSONDecodeError:
+            pass
+    return t
+
+
+def _maybe_index_conversation_turn(
+    conversation_id: Optional[str], user_message: str, last_message: object
+) -> None:
+    """After each reply, embed the exchange for QA RAG within this thread only."""
+    if RAG_RETRIEVER is None or not conversation_id or not str(conversation_id).strip():
+        return
+    try:
+        raw = getattr(last_message, "content", None)
+        if raw is None and isinstance(last_message, dict):
+            raw = last_message.get("content", "")
+        plain = _assistant_content_to_plain(str(raw or ""))
+        RAG_RETRIEVER.ingest_conversation_turn(
+            str(conversation_id).strip(),
+            user_message,
+            plain,
+        )
+    except Exception as e:
+        print(f"Conversation memory ingest (non-fatal): {e}")
 
 # ElevenLabs API key for real-time speech-to-text and TTS (keep server-side only)
 ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
@@ -152,6 +191,7 @@ async def chat(request: ChatRequest):
             request.web_search_enabled,
             request.uploaded_files,
             request.spatial_context,
+            request.conversation_id,
         )
         
         # Format conversation history safely
@@ -164,7 +204,15 @@ async def chat(request: ChatRequest):
                 })
             elif isinstance(msg, dict):
                 formatted_history.append(msg)
-        
+
+        hist_raw = result.get("conversation_history") or []
+        if hist_raw:
+            _maybe_index_conversation_turn(
+                request.conversation_id,
+                request.message.strip(),
+                hist_raw[-1],
+            )
+
         return ChatResponse(
             response=result["response"],
             requires_frontend=result.get("requires_frontend", False),
@@ -213,13 +261,19 @@ def rag_status():
 
 
 @app.get("/rag/preview")
-def rag_preview(query: str = Query(..., min_length=1, description="Test retrieval; no LLM")):
+def rag_preview(
+    query: str = Query(..., min_length=1, description="Test retrieval; no LLM"),
+    conversation_id: Optional[str] = Query(
+        None,
+        description="If set, same QA filter as /chat (memory for this thread + KB + legacy)",
+    ),
+):
     """Return raw Qdrant hits for debugging (embed query + vector search)."""
     if RAG_RETRIEVER is None:
         raise HTTPException(status_code=503, detail="RAG not configured")
     q = query.strip()
     try:
-        hits = RAG_RETRIEVER.retrieve(q)
+        hits = RAG_RETRIEVER.retrieve(q, conversation_id=conversation_id)
         return {
             "query": q,
             "hit_count": len(hits),
@@ -249,10 +303,9 @@ def rag_ingest_text(body: RAGIngestTextRequest):
             detail=f"text too large (max {MAX_RAG_TEXT_CHARS} characters)",
         )
     sid = (body.source_id or "anonymous").strip()
+    meta = {**(body.metadata or {}), "scope": "knowledge_base"}
     try:
-        result = RAG_RETRIEVER.ingest_text(
-            body.text, sid, metadata=body.metadata or None
-        )
+        result = RAG_RETRIEVER.ingest_text(body.text, sid, metadata=meta)
         return {"ok": True, **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -281,7 +334,7 @@ async def rag_ingest_file(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     sid = (source_id or fname or "upload").strip()
-    meta = {"filename": fname, **extract_meta}
+    meta = {"scope": "knowledge_base", "filename": fname, **extract_meta}
     try:
         result = RAG_RETRIEVER.ingest_text(
             text,

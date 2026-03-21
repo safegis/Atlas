@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
 
 from .chunking import chunk_text
 from .embeddings import embed_query, embed_texts
+from .qa_filters import build_qa_retrieval_filter
 from .store import (
     default_collection_name,
     ensure_collection,
@@ -78,15 +80,46 @@ class RAGRetriever:
         )
         return {"chunks": n, "source_id": source_id, "collection": self.collection_name}
 
-    def retrieve(self, query: str) -> list[dict[str, Any]]:
+    def retrieve(
+        self, query: str, conversation_id: str | None = None
+    ) -> list[dict[str, Any]]:
         self.ensure_ready()
         qv = embed_query(query)
+        flt = build_qa_retrieval_filter(conversation_id)
+        # Slightly higher cap when both KB + same-thread memory can match
+        lim = self.top_k
+        if conversation_id and conversation_id.strip():
+            lim = min(max(self.top_k * 2, self.top_k), 20)
         return search_similar(
             self.client,
             self.collection_name,
             qv,
-            limit=self.top_k,
+            limit=lim,
             score_threshold=self.score_threshold,
+            qdrant_filter=flt,
+        )
+
+    def ingest_conversation_turn(
+        self,
+        conversation_id: str,
+        user_text: str,
+        assistant_text: str,
+    ) -> dict[str, Any]:
+        """Chunk/embed/store one exchange for retrieval within this conversation only."""
+        cid = (conversation_id or "").strip()
+        u = (user_text or "").strip()
+        a = (assistant_text or "").strip()
+        if not cid or (not u and not a):
+            return {"chunks": 0, "skipped": True, "reason": "empty"}
+        blob = f"User: {u}\nAssistant: {a}\n"
+        sid = f"conv:{cid}:{uuid.uuid4().hex}"
+        return self.ingest_text(
+            blob,
+            sid,
+            metadata={
+                "scope": "conversation_memory",
+                "conversation_id": cid,
+            },
         )
 
     def format_context(self, hits: list[dict[str, Any]], max_chars: int = 6000) -> str:
@@ -96,10 +129,17 @@ class RAGRetriever:
         used = 0
         for i, h in enumerate(hits, 1):
             src = h.get("source_id") or "unknown"
+            meta = h.get("metadata") or {}
+            kind = meta.get("scope", "")
+            label = (
+                "this conversation"
+                if kind == "conversation_memory"
+                else "knowledge base"
+            )
             body = (h.get("text") or "").strip()
             if not body:
                 continue
-            block = f"[{i}] (source: {src}, score: {h.get('score', 0):.3f})\n{body}\n"
+            block = f"[{i}] ({label}, source: {src}, score: {h.get('score', 0):.3f})\n{body}\n"
             if used + len(block) > max_chars:
                 break
             parts.append(block)
