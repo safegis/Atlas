@@ -4,6 +4,7 @@ from .map_tools import (
     change_map_style,
     switch_view_mode,
     control_earthquake_data,
+    control_tsunami_data,
     control_weather_data,
     ask_clarification,
     TOOLS
@@ -14,6 +15,7 @@ __all__ = [
     "change_map_style", 
     "switch_view_mode",
     "control_earthquake_data",
+    "control_tsunami_data",
     "control_weather_data",
     "ask_clarification",
     "TOOLS"

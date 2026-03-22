@@ -1,7 +1,32 @@
 """Clarification agent for handling ambiguous requests"""
 import json
+import re
+
 from langchain_core.messages import AIMessage
 from state import AgentState
+
+
+def _message_picks_option_n(message_lower: str, n: int) -> bool:
+    """
+    True if the user chose option n: '1', 'option 1', 'go with option 1', 'the first', etc.
+    """
+    digit = str(n)
+    t = message_lower.strip()
+    if t == digit:
+        return True
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+    ordinals = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth"}
+    w = words.get(n, "")
+    if w and t == w:
+        return True
+    o = ordinals.get(n, "")
+    if o and t == o:
+        return True
+    if re.search(rf"\boption\s*{digit}\b", t):
+        return True
+    if o and (f"the {o}" in t or f"{o} one" in t):
+        return True
+    return False
 
 
 class ClarificationAgent:
@@ -132,6 +157,205 @@ class ClarificationAgent:
                     return [action, pending_map]
             return [action]
         
+        # Tsunami-only picker (vague tsunami prompt — list feeds like earthquake source list)
+        if pending_action.get("clarification_kind") == "tsunami_sources":
+            tok = last_message.strip()
+
+            def _merge_tsunami(action: dict) -> list:
+                return merge_with_pending_map(action, pending_action)
+
+            suggested_ts = pending_action.get("suggested_action", {})
+            if suggested_ts.get("tool") == "control_tsunami_data" and (
+                tok
+                in (
+                    "1",
+                    "one",
+                    "first",
+                    "yes",
+                    "yeah",
+                    "yep",
+                    "sure",
+                    "ok",
+                    "okay",
+                )
+                or _message_picks_option_n(last_message, 1)
+                or "phivolcs" in last_message
+                or (
+                    "tsunami" in last_message
+                    and "earthquake" not in last_message
+                    and "quake" not in last_message
+                )
+                or "bulletin" in last_message
+            ):
+                action = {
+                    "tool": "control_tsunami_data",
+                    "action": "enable",
+                    "requires_frontend": True,
+                }
+                all_actions = _merge_tsunami(action)
+                if len(all_actions) > 1:
+                    state["messages"].append(
+                        AIMessage(
+                            content=json.dumps(
+                                {
+                                    "multiple_actions": all_actions,
+                                    "requires_frontend": True,
+                                }
+                            )
+                        )
+                    )
+                else:
+                    state["messages"].append(AIMessage(content=json.dumps(action)))
+                state["clarification_needed"] = False
+                state["pending_action"] = None
+                return state
+
+        # Live hazard feed picker (Philippine quake / USGS / tsunami / weather)
+        if pending_action.get("clarification_kind") == "live_hazard_feeds":
+            tok = last_message.strip()
+
+            def _merge_live_hazard(action: dict) -> list:
+                return merge_with_pending_map(action, pending_action)
+
+            # Option 3 — tsunami (before earthquake handler: "3" means "both" there)
+            if (
+                tok in ("3", "three", "third")
+                or _message_picks_option_n(last_message, 3)
+                or (
+                    "tsunami" in last_message
+                    and "earthquake" not in last_message
+                    and "quake" not in last_message
+                )
+                or (
+                    "bulletin" in last_message
+                    and "earthquake" not in last_message
+                    and "quake" not in last_message
+                )
+            ):
+                action = {
+                    "tool": "control_tsunami_data",
+                    "action": "enable",
+                    "requires_frontend": True,
+                }
+                all_actions = _merge_live_hazard(action)
+                if len(all_actions) > 1:
+                    state["messages"].append(
+                        AIMessage(
+                            content=json.dumps(
+                                {
+                                    "multiple_actions": all_actions,
+                                    "requires_frontend": True,
+                                }
+                            )
+                        )
+                    )
+                else:
+                    state["messages"].append(AIMessage(content=json.dumps(action)))
+                state["clarification_needed"] = False
+                state["pending_action"] = None
+                return state
+
+            # Option 1 — Philippine earthquakes
+            if (
+                option_norm in ("1", "one", "first")
+                or tok in ("1", "one", "first")
+                or _message_picks_option_n(last_message, 1)
+                or option_norm.startswith("philippines")
+                or last_message.startswith("philippines")
+                or ("philippine" in last_message and "tsunami" not in last_message)
+                or ("phivolcs" in last_message and "tsunami" not in last_message)
+                or option_norm in ("philippines", "philippine", "phivolcs", "local")
+                or last_message in ("philippines", "philippine", "phivolcs", "local")
+            ):
+                action = {
+                    "tool": "control_earthquake_data",
+                    "action": "enable",
+                    "source": "philippine",
+                    "requires_frontend": True,
+                }
+                all_actions = _merge_live_hazard(action)
+                if len(all_actions) > 1:
+                    state["messages"].append(
+                        AIMessage(
+                            content=json.dumps(
+                                {
+                                    "multiple_actions": all_actions,
+                                    "requires_frontend": True,
+                                }
+                            )
+                        )
+                    )
+                else:
+                    state["messages"].append(AIMessage(content=json.dumps(action)))
+                state["clarification_needed"] = False
+                state["pending_action"] = None
+                return state
+
+            # Option 2 — Global / USGS
+            if (
+                option_norm in ("2", "two", "second")
+                or tok in ("2", "two", "second")
+                or _message_picks_option_n(last_message, 2)
+                or option_norm in ("global", "usgs", "worldwide", "world")
+                or last_message in ("global", "usgs", "worldwide", "world")
+                or option_norm.startswith("global")
+                or last_message.startswith("global")
+            ):
+                action = {
+                    "tool": "control_earthquake_data",
+                    "action": "enable",
+                    "source": "global",
+                    "requires_frontend": True,
+                }
+                all_actions = _merge_live_hazard(action)
+                if len(all_actions) > 1:
+                    state["messages"].append(
+                        AIMessage(
+                            content=json.dumps(
+                                {
+                                    "multiple_actions": all_actions,
+                                    "requires_frontend": True,
+                                }
+                            )
+                        )
+                    )
+                else:
+                    state["messages"].append(AIMessage(content=json.dumps(action)))
+                state["clarification_needed"] = False
+                state["pending_action"] = None
+                return state
+
+            # Option 4 — Weather (enable all scopes; user can refine in the monitor)
+            if (
+                tok in ("4", "four", "fourth")
+                or _message_picks_option_n(last_message, 4)
+                or "weather" in last_message
+                or "temperature" in last_message
+            ):
+                action = {
+                    "tool": "control_weather_data",
+                    "action": "enable",
+                    "scope": "all",
+                    "requires_frontend": True,
+                }
+                all_actions = _merge_live_hazard(action)
+                if len(all_actions) > 1:
+                    state["messages"].append(
+                        AIMessage(
+                            content=json.dumps(
+                                {
+                                    "multiple_actions": all_actions,
+                                    "requires_frontend": True,
+                                }
+                            )
+                        )
+                    )
+                else:
+                    state["messages"].append(AIMessage(content=json.dumps(action)))
+                state["clarification_needed"] = False
+                state["pending_action"] = None
+                return state
+
         # Check for earthquake source selection
         # Option 1: Philippines
         if (
@@ -139,6 +363,7 @@ class ClarificationAgent:
             or option_norm.startswith("philippines")
             or last_message in ["philippines", "philippine", "phivolcs", "local", "1"]
             or last_message.startswith("philippines")
+            or _message_picks_option_n(last_message, 1)
         ):
             suggested = pending_action.get("suggested_action", {})
             if suggested.get("tool") == "control_earthquake_data":
@@ -163,6 +388,7 @@ class ClarificationAgent:
             or option_norm.startswith("global")
             or last_message in ["global", "usgs", "worldwide", "world", "2"]
             or last_message.startswith("global")
+            or _message_picks_option_n(last_message, 2)
         ):
             suggested = pending_action.get("suggested_action", {})
             if suggested.get("tool") == "control_earthquake_data":
@@ -187,6 +413,7 @@ class ClarificationAgent:
             or option_norm.startswith("both")
             or last_message in ["both", "all", "3"]
             or last_message.startswith("both")
+            or _message_picks_option_n(last_message, 3)
         ):
             suggested = pending_action.get("suggested_action", {})
             if suggested.get("tool") == "control_earthquake_data":
@@ -234,7 +461,11 @@ class ClarificationAgent:
                 user_action = "enable"
             
             # Option 1: Province level (Philippines)
-            if last_message in ["province", "provincial", "region", "1"] or "philippines" in last_message:
+            if (
+                last_message in ["province", "provincial", "region", "1"]
+                or "philippines" in last_message
+                or _message_picks_option_n(last_message, 1)
+            ):
                 action = {"tool": "control_weather_data", "action": user_action, "scope": "province", "requires_frontend": True}
                 state["messages"].append(AIMessage(content=json.dumps(action)))
                 state["clarification_needed"] = False
@@ -242,7 +473,9 @@ class ClarificationAgent:
                 return state
             
             # Option 2: City - Abra
-            if "abra" in last_message or last_message == "2":
+            if "abra" in last_message or last_message == "2" or _message_picks_option_n(
+                last_message, 2
+            ):
                 action = {"tool": "control_weather_data", "action": user_action, "scope": "city", "province": "Abra", "requires_frontend": True}
                 state["messages"].append(AIMessage(content=json.dumps(action)))
                 state["clarification_needed"] = False
@@ -250,7 +483,11 @@ class ClarificationAgent:
                 return state
             
             # Option 3: City - Agusan del Norte
-            if "agusan del norte" in last_message or last_message == "3":
+            if (
+                "agusan del norte" in last_message
+                or last_message == "3"
+                or _message_picks_option_n(last_message, 3)
+            ):
                 action = {"tool": "control_weather_data", "action": user_action, "scope": "city", "province": "Agusan del Norte", "requires_frontend": True}
                 state["messages"].append(AIMessage(content=json.dumps(action)))
                 state["clarification_needed"] = False
@@ -258,7 +495,11 @@ class ClarificationAgent:
                 return state
             
             # Option 4: City - Agusan del Sur
-            if "agusan del sur" in last_message or last_message == "4":
+            if (
+                "agusan del sur" in last_message
+                or last_message == "4"
+                or _message_picks_option_n(last_message, 4)
+            ):
                 action = {"tool": "control_weather_data", "action": user_action, "scope": "city", "province": "Agusan del Sur", "requires_frontend": True}
                 state["messages"].append(AIMessage(content=json.dumps(action)))
                 state["clarification_needed"] = False
@@ -266,7 +507,11 @@ class ClarificationAgent:
                 return state
             
             # Option 5: City - Aklan
-            if "aklan" in last_message or last_message == "5":
+            if (
+                "aklan" in last_message
+                or last_message == "5"
+                or _message_picks_option_n(last_message, 5)
+            ):
                 action = {"tool": "control_weather_data", "action": user_action, "scope": "city", "province": "Aklan", "requires_frontend": True}
                 state["messages"].append(AIMessage(content=json.dumps(action)))
                 state["clarification_needed"] = False
@@ -274,7 +519,11 @@ class ClarificationAgent:
                 return state
             
             # Option 6: All weather data
-            if last_message in ["all", "6"] or last_message.startswith("all"):
+            if (
+                last_message in ["all", "6"]
+                or last_message.startswith("all")
+                or _message_picks_option_n(last_message, 6)
+            ):
                 action = {"tool": "control_weather_data", "action": user_action, "scope": "all", "requires_frontend": True}
                 state["messages"].append(AIMessage(content=json.dumps(action)))
                 state["clarification_needed"] = False
@@ -367,6 +616,7 @@ class ClarificationAgent:
                 # Collect all map actions
                 map_actions = [map_action]
                 additional_map = pending_action.get("additional_map_actions")
+                conflict_note = pending_action.get("conflict_note")
                 if additional_map:
                     map_actions.extend(additional_map)
                 
@@ -380,3 +630,34 @@ class ClarificationAgent:
                 
                 # No second clarification needed, execute all
                 actions = ([hazard_action] if hazard_action else []) + map_actions
+                
+                if len(actions) > 1:
+                    response = {
+                        "multiple_actions": actions,
+                        "requires_frontend": True,
+                    }
+                    if conflict_note:
+                        response["info_message"] = conflict_note
+                    state["messages"].append(AIMessage(content=json.dumps(response)))
+                else:
+                    response = map_action.copy()
+                    if conflict_note:
+                        response["info_message"] = conflict_note
+                    state["messages"].append(AIMessage(content=json.dumps(response)))
+                
+                state["clarification_needed"] = False
+                state["pending_action"] = None
+                return state
+        
+        state["clarification_needed"] = False
+        state["messages"].append(
+            AIMessage(
+                content=json.dumps(
+                    {
+                        "text": "I'm not sure which option you meant. Please reply with the option number (e.g. **1**) or the name from the list above."
+                    }
+                )
+            )
+        )
+        state["pending_action"] = None
+        return state

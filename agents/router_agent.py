@@ -385,9 +385,20 @@ def _prev_qa_offered_map_hazard_demo(prev_content: dict) -> bool:
         return True
     if "weather" in tl and "map" in tl:
         return True
+    if "tsunami" in tl and ("map" in tl or "phivolcs" in tl or "enable" in tl or "display" in tl):
+        return True
     # Offer phrasing from QA system prompt
     if ("would you like" in tl or "demonstrate" in tl or "show you" in tl or "on the map" in tl) and any(
-        k in tl for k in ("earthquake", "phivolcs", "usgs", "seismic", "quake", "weather")
+        k in tl
+        for k in (
+            "earthquake",
+            "phivolcs",
+            "usgs",
+            "seismic",
+            "quake",
+            "weather",
+            "tsunami",
+        )
     ):
         return True
     return False
@@ -669,6 +680,7 @@ class RouterAgent:
         
         # Hazard Agent - Earthquake, weather, live hazards
         hazard_keywords = ["earthquake", "seismic", "weather", "temperature", "climate",
+                          "tsunami", "tsunamis",
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
@@ -757,6 +769,19 @@ class RouterAgent:
             )
         ):
             print("Routing to: hazard_agent (earthquake / seismic monitoring)")
+            return "hazard_agent"
+
+        if not is_question and any(
+            w in msg_lower
+            for w in (
+                "tsunami",
+                "tsunamis",
+                "tsunami bulletin",
+                "tsunami hazard",
+                "phivolcs tsunami",
+            )
+        ):
+            print("Routing to: hazard_agent (tsunami bulletin / map layer)")
             return "hazard_agent"
         
         # Check for map ACTION keywords - prioritize over hazard if both present

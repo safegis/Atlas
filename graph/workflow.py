@@ -163,6 +163,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         potential_responses = ["yes", "yeah", "yep", "sure", "ok", "okay", "no", "nope", "nah", "cancel",
                               "philippines", "philippine", "phivolcs", "local", 
                               "global", "usgs", "worldwide", "world",
+                              "tsunami", "bulletin",
+                              "weather",
                               "both", "all",
                               "province", "provincial", "region",
                               "city", "municipality", "municipal",
@@ -171,7 +173,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
                               "existing", "imported", "import", "upload", "file", "files", "system",
                               "run", "start", "go", "proceed", "confirm", "stop", "abort",
                               "option 1", "option 2", "option 3", "option 4", "option 5", "option 6",
-                              "option one", "option two", "option three",
+                              "option one", "option two", "option three", "option four",
+                              "one", "two", "three", "four", "first", "second", "third", "fourth",
                               "go with", "use option", "choose option", "select option", "pick option",
                               "1", "2", "3", "4", "5", "6"]
         
@@ -181,7 +184,7 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         has_action_keyword = any(keyword in msg_lower for keyword in action_keywords)
         # "Show both" / "Display global" answer a clarification; "show" must not block pending_action restore
         if has_action_keyword and re.match(
-            r"^\s*(show|display)\s+(both|all|global|philippines?|phivolcs|usgs|worldwide|world)(\s+please)?\s*\.?\s*$",
+            r"^\s*(show|display)\s+(both|all|global|philippines?|phivolcs|usgs|worldwide|world|tsunami)(\s+please)?\s*\.?\s*$",
             msg_lower,
         ):
             has_action_keyword = False

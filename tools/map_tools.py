@@ -97,6 +97,24 @@ def control_earthquake_data(action: str, source: str = "philippine") -> dict:
 
 
 @tool
+def control_tsunami_data(action: str) -> dict:
+    """
+    Enable or disable PHIVOLCS tsunami bulletin monitoring on the map (Live Hazard Monitor).
+
+    Args:
+        action: Either "enable" or "disable"
+
+    Returns:
+        dict with tsunami control action for the frontend
+    """
+    return {
+        "tool": "control_tsunami_data",
+        "action": action,
+        "requires_frontend": True,
+    }
+
+
+@tool
 def control_weather_data(action: str, scope: str = "province") -> dict:
     """
     Enable or disable weather data monitoring.
@@ -200,6 +218,7 @@ TOOLS = [
     change_map_style,
     switch_view_mode,
     control_earthquake_data,
+    control_tsunami_data,
     control_weather_data,
     control_time_of_day,
     control_zoom,
