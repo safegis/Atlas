@@ -211,6 +211,7 @@ def search_similar(
     query_vector: list[float],
     limit: int = 5,
     score_threshold: float | None = None,
+    qdrant_filter: qm.Filter | None = None,
 ) -> list[dict[str, Any]]:
     vname = resolve_vector_name(client, collection_name)
     if vname:
@@ -224,6 +225,7 @@ def search_similar(
             using=vname if vname else None,
             limit=limit,
             score_threshold=score_threshold,
+            query_filter=qdrant_filter,
             with_payload=True,
         )
         scored = list(getattr(resp, "points", None) or [])
@@ -238,6 +240,7 @@ def search_similar(
             query_vector=qv,
             limit=limit,
             score_threshold=score_threshold,
+            query_filter=qdrant_filter,
             with_payload=True,
         )
     hits = []

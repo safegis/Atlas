@@ -6,7 +6,17 @@ from langchain_core.messages import AIMessage
 
 from agents.router_agent import _is_affirmation, _prev_qa_offered_map_hazard_demo
 from state import AgentState
-from tools import control_earthquake_data, control_weather_data
+from tools import (
+    control_earthquake_data,
+    control_tsunami_data,
+    control_weather_data,
+)
+
+# Tsunami-only clarification labels. Keep in sync with
+# Simulation-Studio/frontend/src/components/controls/Main/TsunamiDataConfig.ts (tsunamiData).
+LIVE_TSUNAMI_FEED_OPTIONS = [
+    "1 — PHIVOLCS Tsunami Information (Philippines / Pacific — official bulletins)",
+]
 
 
 class HazardAgent:
@@ -60,6 +70,10 @@ class HazardAgent:
             except Exception:
                 pass
         tl = text.lower()
+        if "tsunami" in tl and not any(
+            x in tl for x in ("earthquake", "quake", "weather", "temperature")
+        ):
+            return "enable phivolcs tsunami data on the map"
         if "weather" in tl and not any(
             x in tl for x in ("earthquake", "quake", "phivolcs", "usgs", "seismic")
         ):
@@ -148,8 +162,11 @@ class HazardAgent:
                 "type": "clarification",
                 "question": ambiguous["question"],
                 "options": ambiguous["options"],
-                "suggested_action": ambiguous.get("suggested_action")
+                "suggested_action": ambiguous.get("suggested_action"),
             }
+            ck = ambiguous.get("clarification_kind")
+            if ck:
+                clarification_response["clarification_kind"] = ck
             
             # If there are map actions (not clarifications), store them as pending
             if map_action and map_action.get("type") != "clarification":
@@ -224,7 +241,7 @@ class HazardAgent:
         else:
             state["messages"].append(AIMessage(
                 content=json.dumps({
-                    "text": "I can help you enable earthquake or weather monitoring. What would you like to see?"
+                    "text": "I can help you enable earthquake, tsunami, or weather monitoring. What would you like to see?"
                 })
             ))
         
@@ -242,6 +259,7 @@ class HazardAgent:
             "hazard",
             "phivolcs",
             "usgs",
+            "tsunami",
         )
 
         def _bad_search(d: dict) -> bool:
@@ -270,7 +288,8 @@ class HazardAgent:
         has_location_request = any(keyword in msg_lower for keyword in location_keywords)
         # "show ... earthquake ... on the map" is hazard wording, not search_location("earthquake")
         hazard_location_false_positive = any(
-            w in msg_lower for w in ("earthquake", "seismic", "quake", "phivolcs", "usgs")
+            w in msg_lower
+            for w in ("earthquake", "seismic", "quake", "phivolcs", "usgs", "tsunami")
         )
         
         # If location request detected, extract the location query
@@ -368,6 +387,61 @@ class HazardAgent:
         
         return None
     
+    @staticmethod
+    def _explicit_tsunami_enable(msg_lower: str) -> bool:
+        """User named the actual tsunami data product or layer — OK to enable without a picker."""
+        return (
+            "phivolcs tsunami" in msg_lower
+            or "tsunami bulletin" in msg_lower
+            or "tsunami information" in msg_lower
+            or "tsunami layer" in msg_lower
+            or "tsunami feed" in msg_lower
+        )
+
+    @staticmethod
+    def _needs_tsunami_feed_clarification(msg_lower: str, is_disable: bool) -> bool:
+        """User mentioned tsunami but not a specific product/layer — list tsunami feeds only."""
+        if is_disable:
+            return False
+        has_tsunami = "tsunami" in msg_lower
+        has_quake = any(
+            w in msg_lower
+            for w in ("earthquake", "earthquakes", "seismic", "quake")
+        )
+        return (
+            has_tsunami
+            and not has_quake
+            and not HazardAgent._explicit_tsunami_enable(msg_lower)
+        )
+
+    @staticmethod
+    def _needs_generic_live_hazard_feed_clarification(
+        msg_lower: str, is_disable: bool
+    ) -> bool:
+        """
+        Generic 'live hazard(s)' with no feed type named — full hazard picker
+        (earthquake / tsunami / weather).
+        """
+        if is_disable:
+            return False
+        has_tsunami = "tsunami" in msg_lower
+        has_quake = any(
+            w in msg_lower
+            for w in ("earthquake", "earthquakes", "seismic", "quake")
+        )
+        if "live" not in msg_lower or "hazard" not in msg_lower:
+            return False
+        if has_tsunami or has_quake:
+            return False
+        if any(
+            w in msg_lower
+            for w in ("weather", "temperature", "climate")
+        ):
+            return False
+        if "monitor" in msg_lower or "panel" in msg_lower:
+            return False
+        return True
+
     def _detect_ambiguous(self, message: str) -> Optional[dict]:
         """Detect ambiguous hazard requests that need clarification"""
         msg_lower = message.lower()
@@ -375,6 +449,43 @@ class HazardAgent:
         # Determine if this is an enable or disable request
         disable_keywords = ["disable", "hide", "turn off", "deactivate", "remove"]
         is_disable = any(word in msg_lower for word in disable_keywords)
+        
+        # Vague tsunami — same pattern as earthquake: only list tsunami feeds (not weather/quake)
+        if self._needs_tsunami_feed_clarification(msg_lower, is_disable):
+            return {
+                "type": "clarification",
+                "clarification_kind": "tsunami_sources",
+                "question": (
+                    "These tsunami data feeds are available. Which would you like to show on the map?"
+                ),
+                "options": list(LIVE_TSUNAMI_FEED_OPTIONS),
+                "suggested_action": {
+                    "tool": "control_tsunami_data",
+                    "action": "enable",
+                    "requires_frontend": True,
+                },
+            }
+
+        # Generic live hazard(s) — user did not name earthquake, tsunami, or weather
+        if self._needs_generic_live_hazard_feed_clarification(msg_lower, is_disable):
+            return {
+                "type": "clarification",
+                "clarification_kind": "live_hazard_feeds",
+                "question": (
+                    "Several live hazard feeds are available. Which would you like to show on the map?"
+                ),
+                "options": [
+                    "1 — Philippines: earthquakes (PHIVOLCS)",
+                    "2 — Global: earthquakes (USGS)",
+                    "3 — PHIVOLCS tsunami bulletin / information",
+                    "4 — Weather (province, city, or all — you can narrow in the Live Hazard Monitor)",
+                ],
+                "suggested_action": {
+                    "tool": "control_earthquake_data",
+                    "action": "enable",
+                    "source": "philippine",
+                },
+            }
         
         # Check if requesting earthquake data without specifying source
         if any(word in msg_lower for word in ["earthquake", "seismic", "quake"]):
@@ -437,7 +548,7 @@ class HazardAgent:
                 "tool": "open_live_hazard_monitor",
                 "action": "show_panel",
                 "requires_frontend": True,
-                "text": "Opening the Live Hazard Monitor panel. You can now enable earthquake and weather monitoring."
+                "text": "Opening the Live Hazard Monitor panel. You can now enable earthquake, tsunami, and weather monitoring."
             }
         elif is_open_command and mentions_hazard_layers and "panel" in msg_lower:
             # User wants to open the hazard layers in the map layers panel
@@ -447,7 +558,37 @@ class HazardAgent:
                 "requires_frontend": True,
                 "text": "Opening the Hazard Layers panel. You can now view and manage hazard layers on the map."
             }
-        
+
+        # Tsunami — disable can stay broad; enable only when the product/layer is explicit.
+        # Vague tsunami is clarified in _detect_ambiguous before we get here.
+        has_quake = any(
+            w in msg_lower
+            for w in ("earthquake", "earthquakes", "seismic", "quake")
+        )
+        if "tsunami" in msg_lower and not has_quake:
+            wants_disable = any(
+                w in msg_lower
+                for w in (
+                    "disable",
+                    "hide",
+                    "turn off",
+                    "remove",
+                    "clear",
+                )
+            )
+            if wants_disable:
+                return {
+                    "tool": "control_tsunami_data",
+                    "action": "disable",
+                    "requires_frontend": True,
+                }
+            if self._explicit_tsunami_enable(msg_lower):
+                return {
+                    "tool": "control_tsunami_data",
+                    "action": "enable",
+                    "requires_frontend": True,
+                }
+
         system_prompt = """You are a hazard monitoring intent parser. Extract the user's intent from their message.
 
 Available hazard actions:
@@ -456,7 +597,12 @@ Available hazard actions:
    - source: "philippine" (PHIVOLCS), "global" (USGS), or "both"
    - Examples: "show earthquakes" → enable, "Philippine earthquakes" → philippine
 
-2. **control_weather_data** - Enable/disable weather monitoring
+2. **control_tsunami_data** - Enable/disable PHIVOLCS tsunami bulletin layer (Live Hazard Monitor)
+   - action: "enable" or "disable"
+   - Enable only when the user names the bulletin/layer/PHIVOLCS tsunami (vague "tsunami hazard" is clarified elsewhere).
+   - Examples: "enable PHIVOLCS tsunami bulletin" → enable, "hide tsunami" → disable
+
+3. **control_weather_data** - Enable/disable weather monitoring
    - action: "enable" or "disable"
    - scope: "province" (Philippines-wide), "city" (specific), or "all"
    - province: (if scope=city) "Abra", "Agusan del Norte", "Agusan del Sur", "Aklan"
@@ -470,6 +616,8 @@ Examples:
 - "enable earthquake data" → {"tool": "control_earthquake_data", "action": "enable", "source": "philippine"}
 - "show global earthquakes" → {"tool": "control_earthquake_data", "action": "enable", "source": "global"}
 - "disable all earthquakes" → {"tool": "control_earthquake_data", "action": "disable", "source": "both"}
+- "show PHIVOLCS tsunami bulletin" → {"tool": "control_tsunami_data", "action": "enable"}
+- "disable tsunami layer" → {"tool": "control_tsunami_data", "action": "disable"}
 - "show weather" → {"tool": "control_weather_data", "action": "enable", "scope": "province"}
 - "weather in Aklan" → {"tool": "control_weather_data", "action": "enable", "scope": "city", "province": "Aklan"}
 
@@ -508,6 +656,13 @@ Return ONLY the JSON object, no explanation."""
                 else:
                     return {"tool": "control_earthquake_data", "action": action, "source": source, "requires_frontend": True}
             
+            elif tool == "control_tsunami_data":
+                return {
+                    "tool": "control_tsunami_data",
+                    "action": action,
+                    "requires_frontend": True,
+                }
+
             elif tool == "control_weather_data":
                 scope = parsed.get("scope", "province")
                 province = parsed.get("province")
@@ -528,6 +683,17 @@ Return ONLY the JSON object, no explanation."""
                 action = "disable" if "disable" in msg_lower or "hide" in msg_lower else "enable"
                 source = "global" if "global" in msg_lower or "usgs" in msg_lower else "philippine"
                 return {"tool": "control_earthquake_data", "action": action, "source": source, "requires_frontend": True}
+
+            if any(
+                t in msg_lower
+                for t in ("tsunami", "tsunami bulletin", "phivolcs tsunami")
+            ):
+                action = "disable" if "disable" in msg_lower or "hide" in msg_lower else "enable"
+                return {
+                    "tool": "control_tsunami_data",
+                    "action": action,
+                    "requires_frontend": True,
+                }
             
             if "weather" in msg_lower:
                 action = "disable" if "disable" in msg_lower or "hide" in msg_lower else "enable"

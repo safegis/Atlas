@@ -1,6 +1,7 @@
 """LangGraph workflow creation and message processing"""
 import json
 import re
+from typing import Optional
 
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
@@ -104,7 +105,7 @@ def create_agent_graph(llm=None, llm_wrapper=None, exa_api_key: str = None, rag_
     return workflow.compile()
 
 
-def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False, uploaded_files: list = None, spatial_context: list = None) -> dict:
+def process_message(graph, message: str, conversation_history: list = None, map_state: dict = None, web_search_enabled: bool = False, uploaded_files: list = None, spatial_context: list = None, conversation_id: Optional[str] = None) -> dict:
     """
     Process a user message through the agent graph
     
@@ -113,7 +114,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         message: User message
         conversation_history: Previous messages
         map_state: Current map state
-        
+        conversation_id: Optional thread UUID; enables Qdrant memory scoped to this chat only.
+
     Returns:
         dict with response and actions
     """
@@ -161,6 +163,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         potential_responses = ["yes", "yeah", "yep", "sure", "ok", "okay", "no", "nope", "nah", "cancel",
                               "philippines", "philippine", "phivolcs", "local", 
                               "global", "usgs", "worldwide", "world",
+                              "tsunami", "bulletin",
+                              "weather",
                               "both", "all",
                               "province", "provincial", "region",
                               "city", "municipality", "municipal",
@@ -169,7 +173,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
                               "existing", "imported", "import", "upload", "file", "files", "system",
                               "run", "start", "go", "proceed", "confirm", "stop", "abort",
                               "option 1", "option 2", "option 3", "option 4", "option 5", "option 6",
-                              "option one", "option two", "option three",
+                              "option one", "option two", "option three", "option four",
+                              "one", "two", "three", "four", "first", "second", "third", "fourth",
                               "go with", "use option", "choose option", "select option", "pick option",
                               "1", "2", "3", "4", "5", "6"]
         
@@ -179,7 +184,7 @@ def process_message(graph, message: str, conversation_history: list = None, map_
         has_action_keyword = any(keyword in msg_lower for keyword in action_keywords)
         # "Show both" / "Display global" answer a clarification; "show" must not block pending_action restore
         if has_action_keyword and re.match(
-            r"^\s*(show|display)\s+(both|all|global|philippines?|phivolcs|usgs|worldwide|world)(\s+please)?\s*\.?\s*$",
+            r"^\s*(show|display)\s+(both|all|global|philippines?|phivolcs|usgs|worldwide|world|tsunami)(\s+please)?\s*\.?\s*$",
             msg_lower,
         ):
             has_action_keyword = False
@@ -231,7 +236,8 @@ def process_message(graph, message: str, conversation_history: list = None, map_
             "pending_action": pending_action,
             "web_search_enabled": web_search_flag,
             "uploaded_files": uploaded_files or [],
-            "spatial_context": spatial_context or []
+            "spatial_context": spatial_context or [],
+            "conversation_id": (conversation_id or "").strip() or None,
         }
         
         print(f"Initial state created with {len(messages)} messages")

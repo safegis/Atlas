@@ -43,6 +43,333 @@ def _is_affirmation(msg_lower: str) -> bool:
     return False
 
 
+def _looks_like_navigation_or_route_intent(msg_lower: str) -> bool:
+    """
+    Navigation-style phrases that should go to pathfinder even when the message
+    looks like a question (e.g. 'what is the fastest route from A to B').
+    """
+    patterns = [
+        "how do i get",
+        "how can i get",
+        "how to get",
+        "how would i get",
+        "how do you get",
+        "where do i go",
+        "where should i go",
+        "what's the fastest way",
+        "what is the fastest way",
+        "what's the quickest way",
+        "what is the quickest way",
+        "fastest way to",
+        "quickest way to",
+        "best way to get",
+        "what's the best route",
+        "what is the best route",
+        "best route to",
+        "which route",
+        "which way to",
+        "which is faster",
+        "which is shorter",
+        "directions from",
+        "directions to",
+        "get me from",
+        "take me from",
+        "take me to",
+        "bring me to",
+        "travel time",
+        "how long to get",
+        "how long does it take",
+        "how far is",
+        "how far from",
+        "commute from",
+        "commute to",
+        "drive from",
+        "walk from",
+        "bike from",
+        "cycle from",
+        "ride from",
+        "headed to",
+        "heading to",
+        "going from",
+        "going to",
+        "trip from",
+        "trip to",
+        "reroute",
+        "recalculate",
+        "turn-by-turn",
+        "turn by turn",
+    ]
+    if any(p in msg_lower for p in patterns):
+        return True
+    if " from " in msg_lower and " to " in msg_lower:
+        if any(
+            w in msg_lower
+            for w in (
+                "route",
+                "direction",
+                "drive",
+                "walk",
+                "bike",
+                "cycle",
+                "get ",
+                "go ",
+                "way ",
+                "navigate",
+                "path",
+                "commute",
+                "travel",
+            )
+        ):
+            return True
+    return False
+
+
+def _wants_pathfinder_tab_switch(msg_lower: str) -> bool:
+    """
+    Switch Pathfinder between **Set Destination** (point-to-point) and **Find Shelter/s** (evacuation).
+    Must run before _wants_pathfinder_destination_control so "set destination mode" is not misread.
+    """
+    if "pathfinder" not in msg_lower:
+        return False
+    dest_ui = any(
+        p in msg_lower
+        for p in (
+            "set destination mode",
+            "destination mode",
+            "set destination tab",
+            "point to point",
+            "point-to-point",
+            "address to address",
+        )
+    )
+    evac_ui = any(
+        p in msg_lower
+        for p in (
+            "find shelter",
+            "shelter mode",
+            "evacuation mode",
+            "evacuation tab",
+            "shelter/s",
+        )
+    )
+    if not dest_ui and not evac_ui:
+        return False
+    if dest_ui and evac_ui:
+        return False
+    return any(
+        v in msg_lower
+        for v in (
+            "switch ",
+            "change ",
+            "set pathfinder",
+            "put pathfinder",
+            "use pathfinder",
+            "pathfinder to ",
+            "pathfinder tab",
+        )
+    )
+
+
+def _wants_pathfinder_destination_control(msg_lower: str) -> bool:
+    """
+    User wants to change the Pathfinder evacuation/shelter destination or pick a loaded OSM row.
+    Must route to pathfinder_agent (not QA) so the frontend can run imperative UI updates.
+    """
+    if _wants_pathfinder_tab_switch(msg_lower):
+        return False
+    if "shelter" in msg_lower or "evacuation" in msg_lower:
+        if any(
+            p in msg_lower
+            for p in (
+                "select ",
+                "choose ",
+                "switch to ",
+                "use ",
+                "pick ",
+                "set ",
+                "change to ",
+                "change ",
+                "update ",
+            )
+        ):
+            return True
+    if "destination" in msg_lower:
+        if any(
+            p in msg_lower
+            for p in (
+                "change the destination",
+                "change destination",
+                "set the destination",
+                "set destination",
+                "switch the destination",
+                "switch destination",
+                "update destination",
+                "select destination",
+                "pick destination",
+                "current destination",
+                "destination to ",
+                "destination as ",
+                "evacuation destination",
+            )
+        ):
+            return True
+    return False
+
+
+def _wants_pathfinder_clear_routes(msg_lower: str) -> bool:
+    """
+    User wants to remove drawn pathfinder routes from the map (not hide the pathfinder panel).
+    """
+    if "close pathfinder" in msg_lower or "hide pathfinder" in msg_lower:
+        return False
+    if "clear all routes" in msg_lower:
+        return True
+    if "clear routes" in msg_lower and "pathfinder" in msg_lower:
+        return True
+    if not any(w in msg_lower for w in ("clear", "remove", "wipe", "erase")):
+        return False
+    if "route" not in msg_lower and "routes" not in msg_lower:
+        return False
+    if any(
+        p in msg_lower
+        for p in (
+            "on the map",
+            "from the map",
+            "in the map",
+            " displayed",
+            "from map",
+            "drawn on",
+        )
+    ):
+        return True
+    return False
+
+
+def _route_to_pathfinder(msg_lower: str, is_question: bool) -> bool:
+    """Whether to route this message to pathfinder_agent (keywords + navigation questions)."""
+    pathfinder_keywords = [
+        "route",
+        "routes",
+        "directions",
+        "navigate to",
+        "navigation",
+        "find route",
+        "find a route",
+        "show route",
+        "show routes",
+        "get to",
+        "how to get",
+        "way to",
+        "path to",
+        "drive to",
+        "walk to",
+        "cycle to",
+        "bike to",
+        "fastest route",
+        "safest route",
+        "best route",
+        "quickest way",
+        "driving directions",
+        "walking directions",
+        "cycling directions",
+        "pathfinder",
+        "traffic",
+        "avoid traffic",
+        "switch mode",
+        "change mode",
+        "travel mode",
+        "transport mode",
+        "transportation mode",
+        "switch to driving",
+        "switch to walking",
+        "switch to cycling",
+        "switch to motorcycle",
+        "switch to car",
+        "switch to bicycle",
+        "switch to pedestrian",
+        "change to driving",
+        "change to walking",
+        "change to cycling",
+        "show driving routes",
+        "show walking routes",
+        "show cycling routes",
+        "show all modes",
+        "sort by fastest",
+        "sort by safest",
+        "sort by best balance",
+        "show fastest",
+        "show safest",
+        "best balance",
+        "sort routes by",
+        "sort the routes by",
+        "sort routes",
+        "best balance route",
+        "route optimization",
+        "optimize route",
+        "optimize routes",
+        "perform route optimization",
+        "route planning",
+        "commute",
+        "itinerary",
+        "reroute",
+        "recalculate route",
+        "turn by turn",
+        "turn-by-turn",
+        "eta",
+        "travel time",
+        "distance to",
+        "distance from",
+        "shelter",
+        "shelters",
+        "evacuation",
+        "evacuate",
+        "emergency shelter",
+        "nearest shelter",
+        "find shelter",
+        "evacuation route",
+    ]
+    has_kw = any(k in msg_lower for k in pathfinder_keywords)
+    nav = _looks_like_navigation_or_route_intent(msg_lower)
+    if nav:
+        return True
+    if not has_kw:
+        return False
+    if not is_question:
+        return True
+    # Question + routing keyword: still pathfinder if clearly asking for directions / routes
+    if any(
+        p in msg_lower
+        for p in (
+            " from ",
+            " to ",
+            "get to",
+            "directions",
+            "pathfinder",
+            "navigate",
+            "fastest route",
+            "safest route",
+            "best route",
+            "quickest",
+            "shortest route",
+            "optimize",
+            "sort ",
+            "switch ",
+            "change mode",
+            "travel mode",
+            "transport mode",
+            "walking ",
+            "driving ",
+            "cycling ",
+        )
+    ):
+        return True
+    if msg_lower.startswith(
+        ("how do ", "how can ", "how to ", "where do ", "where can ")
+    ):
+        return True
+    return False
+
+
 def _prev_qa_offered_map_hazard_demo(prev_content: dict) -> bool:
     """True if a QA-style JSON reply (not clarification card) offered earthquake/weather on the map."""
     if prev_content.get("type") == "clarification":
@@ -58,9 +385,20 @@ def _prev_qa_offered_map_hazard_demo(prev_content: dict) -> bool:
         return True
     if "weather" in tl and "map" in tl:
         return True
+    if "tsunami" in tl and ("map" in tl or "phivolcs" in tl or "enable" in tl or "display" in tl):
+        return True
     # Offer phrasing from QA system prompt
     if ("would you like" in tl or "demonstrate" in tl or "show you" in tl or "on the map" in tl) and any(
-        k in tl for k in ("earthquake", "phivolcs", "usgs", "seismic", "quake", "weather")
+        k in tl
+        for k in (
+            "earthquake",
+            "phivolcs",
+            "usgs",
+            "seismic",
+            "quake",
+            "weather",
+            "tsunami",
+        )
     ):
         return True
     return False
@@ -189,7 +527,7 @@ class RouterAgent:
         
         # Check if message is short and might be a location name (for pathfinder)
         # Location responses are typically short (1-5 words) and don't contain action keywords
-        is_short_response = len(last_message.split()) <= 5
+        is_short_response = len(last_message.split()) <= 10
         has_no_action_keywords = not any(keyword in msg_lower for keyword in ["find", "show", "search", "enable", "disable", "switch", "change"])
         # Don't treat clear questions (e.g. "What does X mean?") as pathfinder location replies
         looks_like_question = "?" in last_message or any(
@@ -291,23 +629,6 @@ class RouterAgent:
         
         # Use simple keyword-based routing (more reliable than LLM for this)
         # Pathfinder Agent - Route planning and navigation (CHECK FIRST - highest priority for routing)
-        pathfinder_keywords = ["route", "routes", "directions", "navigate to", "navigation",
-                               "find route", "find a route", "show route", "show routes",
-                               "get to", "how to get", "way to", "path to", "drive to",
-                               "walk to", "cycle to", "bike to", "fastest route", "safest route",
-                               "best route", "quickest way", "driving directions", "walking directions",
-                               "cycling directions", "pathfinder", "traffic", "avoid traffic",
-                               "switch mode", "change mode", "switch to driving", "switch to walking",
-                               "switch to cycling", "switch to motorcycle", "switch to car",
-                               "switch to bicycle", "switch to pedestrian", "change to driving",
-                               "change to walking", "change to cycling", "show driving routes",
-                               "show walking routes", "show cycling routes", "show all modes",
-                               "sort by fastest", "sort by safest", "sort by best balance",
-                               "show fastest", "show safest", "best balance",
-                               "sort routes by", "sort the routes by", "sort routes",
-                               "fastest route", "safest route", "best balance route",
-                               "route optimization", "optimize route", "optimize routes",
-                               "perform route optimization", "route planning"]
         
         # Exposure Agent - Exposure assessment
         exposure_keywords = ["exposure", "assessment", "analyze exposure", "run analysis",
@@ -359,6 +680,7 @@ class RouterAgent:
         
         # Hazard Agent - Earthquake, weather, live hazards
         hazard_keywords = ["earthquake", "seismic", "weather", "temperature", "climate",
+                          "tsunami", "tsunamis",
                           "enable", "disable", "turn on", "turn off", "monitoring",
                           "hazard", "hazards", "live"]
         
@@ -389,11 +711,25 @@ class RouterAgent:
             ("layer" in msg_lower or "layers" in msg_lower)
         )
         
-        # Check for pathfinder keywords FIRST (highest priority for routing)
-        if any(keyword in msg_lower for keyword in pathfinder_keywords):
-            if not is_question:
-                print("Routing to: pathfinder_agent")
-                return "pathfinder_agent"
+        # Pathfinder: Set Destination vs Find Shelter/s tab (before "set destination" shelter heuristics)
+        if _wants_pathfinder_tab_switch(msg_lower):
+            print("Routing to: pathfinder_agent (pathfinder tab / UI mode)")
+            return "pathfinder_agent"
+
+        # Pathfinder: pick shelter / change evacuation destination (beats QA "can you…" questions)
+        if _wants_pathfinder_destination_control(msg_lower):
+            print("Routing to: pathfinder_agent (destination / shelter selection)")
+            return "pathfinder_agent"
+
+        # Pathfinder: clear routes from map (not the same as closing the panel)
+        if _wants_pathfinder_clear_routes(msg_lower):
+            print("Routing to: pathfinder_agent (clear routes from map)")
+            return "pathfinder_agent"
+
+        # Pathfinder: keywords + navigation-style questions (see _route_to_pathfinder)
+        if _route_to_pathfinder(msg_lower, is_question):
+            print("Routing to: pathfinder_agent")
+            return "pathfinder_agent"
 
         if wants_spatial_agent:
             print("Routing to: spatial_data_agent")
@@ -433,6 +769,19 @@ class RouterAgent:
             )
         ):
             print("Routing to: hazard_agent (earthquake / seismic monitoring)")
+            return "hazard_agent"
+
+        if not is_question and any(
+            w in msg_lower
+            for w in (
+                "tsunami",
+                "tsunamis",
+                "tsunami bulletin",
+                "tsunami hazard",
+                "phivolcs tsunami",
+            )
+        ):
+            print("Routing to: hazard_agent (tsunami bulletin / map layer)")
             return "hazard_agent"
         
         # Check for map ACTION keywords - prioritize over hazard if both present
