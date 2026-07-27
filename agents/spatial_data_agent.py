@@ -28,6 +28,25 @@ class SpatialDataAgent:
         spatial_ctx: list = state.get("spatial_context") or []
         uploaded_names: list = state.get("uploaded_files") or []
 
+        # Chat-bar import already completed on the frontend this turn
+        if "spatial files imported onto the map this turn" in msg_lower:
+            text = (
+                "Done — those spatial file(s) are on the map and listed under "
+                "**Import / connect spatial data → On map**.\n\n"
+                + self._describe_context(spatial_ctx, uploaded_names)
+            )
+            state["messages"].append(
+                AIMessage(
+                    content=json.dumps(
+                        {
+                            "text": text,
+                            "requires_frontend": False,
+                        }
+                    )
+                )
+            )
+            return state
+
         # --- Rule-based: inventory / analysis of what's already on the map ---
         inventory_triggers = (
             "what layer",
@@ -61,6 +80,8 @@ class SpatialDataAgent:
         system_prompt = f"""You are Atlas (SafeGIS) spatial data intent parser.
 
 The user may have already added layers from local files, APIs, PostGIS, or HTTP GeoJSON.
+They can also attach GeoJSON / KML / SHP / ZIP in the Atlas chat bar; Simulation Studio imports those onto the map before this agent runs (look for "[Spatial files imported onto the map this turn: ...]" in the message).
+
 Current spatial context (JSON array of objects with name, layerName, sourceType):
 {json.dumps(spatial_ctx, indent=0)}
 
@@ -68,7 +89,7 @@ Legacy uploaded file names only (strings): {json.dumps(uploaded_names)}
 
 Return ONE JSON object (no markdown, no prose outside JSON):
 
-1) Open import/connect panel:
+1) Open import/connect panel (when they want the UI but did not attach files in chat):
 {{"tool": "open_spatial_data_panel", "requires_frontend": true, "text": "short confirmation"}}
 
 2) Add a layer by fetching GeoJSON from a URL (Simulation Studio backend will proxy the request):
@@ -83,6 +104,8 @@ Return ONE JSON object (no markdown, no prose outside JSON):
 {{"text": "helpful answer about their layers or how to connect data", "requires_frontend": false}}
 
 Rules:
+- If the message says spatial files were already imported this turn, use (3): confirm they are on the map and appear under Import / connect → On map. Do NOT open the panel unless they ask.
+- If they ask to upload/import spatial files but none were attached and no URL is given, use (1) to open the panel and tell them they can also attach .geojson/.kml/.shp/.zip in chat.
 - If the user asks how to connect PostGIS or MCP, explain that PostGIS is supported from the SQL tab in the panel, and MCP full protocol is limited—HTTP endpoints returning GeoJSON work via API or this tool with a URL.
 - If URLs are missing for case (2), use (3) and ask for the URL.
 - Never invent secrets; use null for unknown tokens.
@@ -139,9 +162,11 @@ Rules:
         else:
             lines.append(
                 "No imported spatial layers are recorded in this chat session yet. "
-                "Use the **file** button on the right toolbar → **Import / connect spatial data** to add GeoJSON files, API endpoints, or PostGIS tables."
+                "Attach GeoJSON / KML / SHP / ZIP in the Atlas chat bar, or use the "
+                "toolbar → **Import / connect spatial data** to add files, API endpoints, or PostGIS tables."
             )
         lines.append(
-            "\nAsk me to **open the import panel**, **add a layer from a GeoJSON URL**, or **summarize layers** anytime."
+            "\nAsk me to **open the import panel**, **add a layer from a GeoJSON URL**, "
+            "**upload attached spatial files** (via the chat paperclip), or **summarize layers** anytime."
         )
         return "\n".join(lines)

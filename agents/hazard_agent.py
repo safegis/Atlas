@@ -15,7 +15,7 @@ from tools import (
 # Tsunami-only clarification labels. Keep in sync with
 # Simulation-Studio/frontend/src/components/controls/Main/TsunamiDataConfig.ts (tsunamiData).
 LIVE_TSUNAMI_FEED_OPTIONS = [
-    "1 — PHIVOLCS Tsunami Information (Philippines / Pacific — official bulletins)",
+    "1 — PHIVOLCS Tsunami Information (Global / Pacific — official bulletins)",
 ]
 
 

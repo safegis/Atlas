@@ -7,6 +7,9 @@ from langchain_core.messages import AIMessage
 from agents.router_agent import (
     _wants_pathfinder_clear_routes,
     _wants_pathfinder_tab_switch,
+    _looks_like_pathfinder_radius_followup,
+    _parse_radius_km_from_message,
+    _previous_evacuation_find_route,
 )
 from tools.pathfinder_tools import PATHFINDER_TOOLS
 from state import AgentState
@@ -357,6 +360,41 @@ Always be clear and concise. If locations are ambiguous, ask for clarification.
         # Check if we have a pending pathfinder action waiting for locations
         pending_action = state.get("pending_action")
         print(f"Pending action from state: {pending_action}")
+
+        # Radius-only follow-up: reuse last evacuation start ("now within 2 km")
+        msg_lower_early = last_message.lower()
+        if _looks_like_pathfinder_radius_followup(msg_lower_early):
+            radius_km = _parse_radius_km_from_message(msg_lower_early)
+            prev_evac = _previous_evacuation_find_route(messages)
+            start_reuse = ((prev_evac or {}).get("start") or "").strip()
+            if radius_km is not None and start_reuse:
+                mode = (prev_evac or {}).get("mode") or "all"
+                action = {
+                    "tool": "find_route",
+                    "start": start_reuse,
+                    "destination": "",
+                    "pathfinder_tab": "evacuation",
+                    "mode": mode,
+                    "radius": radius_km,
+                    "requires_frontend": True,
+                    "action": self._get_action_type("find_route"),
+                    "text": (
+                        f"Updating shelter search near **{start_reuse}** to "
+                        f"**{radius_km:g} km** — refreshing OSM schools and shelters."
+                    ),
+                }
+                print(f"Radius follow-up action: {action}")
+                state["messages"].append(AIMessage(content=json.dumps(action)))
+                return state
+            if radius_km is not None and not start_reuse:
+                # No prior shelter search — ask for a place instead of falling through to LLM
+                return self._request_locations(
+                    state,
+                    "",
+                    "",
+                    "all",
+                    pathfinder_tab="evacuation",
+                )
         
         # If no pending action in state, check conversation history for recent clarification
         if not pending_action or not isinstance(pending_action, dict):
@@ -542,8 +580,14 @@ Always be clear and concise. If locations are ambiguous, ask for clarification.
                     action["destination"] = ""
                     action["requires_frontend"] = True
                     action["action"] = self._get_action_type("find_route")
+                    radius = action.get("radius") or action.get("radius_km")
+                    if radius not in (None, ""):
+                        radius_note = f" (within **{radius} km**)" if not str(radius).lower().endswith("km") else f" (within **{radius}**)"
+                    else:
+                        radius_note = ""
                     action["text"] = action.get("text") or (
-                        f"Opening shelter / evacuation mode near **{start}** — nearby schools and shelters load from OpenStreetMap."
+                        f"Opening shelter / evacuation mode near **{start}**{radius_note} — "
+                        "nearby schools and shelters load from OpenStreetMap."
                     )
                     state["messages"].append(AIMessage(content=json.dumps(action)))
                     return state
@@ -925,11 +969,15 @@ Available pathfinder actions:
 1. **find_route** - Point-to-point routes OR shelter/evacuation search
    - Extract: start location, destination location, mode (optional)
    - For **shelters / schools / evacuation** (nearby safe places, OSM): set **pathfinder_tab** to **"evacuation"**, provide **start** (search origin), leave **destination** as **""** (empty). Do NOT copy explanatory phrases like "the starting point which is…" into destination — the UI loads shelters and can route start→nearest shelter automatically.
+   - When the user specifies a search distance (e.g. "within 2 km", "5km radius"), include **radius** as a number of kilometers (e.g. `"radius": 2` or `"radius": "2km"`). UI slider range is 0.5–30 km; omit radius if not mentioned (UI keeps its current/default radius).
+   - Follow-ups that only change distance after a shelter search (e.g. "now within 2 km", "make it 5km") → same **find_route** with **pathfinder_tab** "evacuation", reuse the previous **start**, set the new **radius**, leave **destination** "".
    - Modes: all, driving, walking, cycling, motorcycle
    - Mode synonyms: car/driving, bicycle/bike/cycling, pedestrian/walking, motorcycle/motorbike
    - If locations are not provided or unclear, return empty strings for start/destination
    - Examples: "find route from SF to LA" → {"tool": "find_route", "start": "San Francisco", "destination": "Los Angeles", "mode": "all"}
    - Examples: "find shelters near Makati" → {"tool": "find_route", "start": "Makati", "destination": "", "pathfinder_tab": "evacuation", "mode": "all"}
+   - Examples: "show shelters near Gateway Mall Cubao with a 2 km radius" → {"tool": "find_route", "start": "Gateway Mall Cubao", "destination": "", "pathfinder_tab": "evacuation", "mode": "all", "radius": 2}
+   - Examples: "now within 2 km" (after a shelter search near Gateway Mall) → {"tool": "find_route", "start": "Gateway Mall Cubao", "destination": "", "pathfinder_tab": "evacuation", "mode": "all", "radius": 2}
    - Examples: "evacuation routes from here" → {"tool": "find_route", "start": "current location", "destination": "", "pathfinder_tab": "evacuation", "mode": "all"}
    - Examples: "drive to the airport" → {"tool": "find_route", "start": "current location", "destination": "airport", "mode": "driving"}
    - Examples: "walking directions to the park" → {"tool": "find_route", "start": "current location", "destination": "park", "mode": "walking"}

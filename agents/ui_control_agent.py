@@ -192,8 +192,11 @@ class UIControlAgent:
                 "open import",
                 "show import",
                 "add files panel",
+                "import spatial",
+                "upload spatial",
+                "spatial files",
             ]
-        ):
+        ) and "spatial files imported onto the map this turn" not in msg_lower:
             return {
                 "tool": "open_panel",
                 "panel": "import_files_panel",

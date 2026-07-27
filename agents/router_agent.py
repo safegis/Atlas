@@ -1,4 +1,5 @@
 """Router agent for directing requests to specialized agents"""
+from typing import Any, Optional
 import json
 import re
 from state import AgentState
@@ -245,6 +246,100 @@ def _wants_pathfinder_clear_routes(msg_lower: str) -> bool:
     return False
 
 
+def _parse_radius_km_from_message(msg_lower: str) -> Optional[float]:
+    """Extract a search radius in km from phrases like 'within 2 km' / 'now 3km radius'."""
+    m = re.search(
+        r"(?:within|inside|under|upto|up to|about|around|of)?\s*"
+        r"([\d.]+)\s*(km|kilometers?|kilometres?)\b",
+        msg_lower,
+    )
+    if not m:
+        m = re.search(
+            r"\b(?:radius|distance)\s*(?:of|to|at|=|:)?\s*([\d.]+)\s*(km|kilometers?|kilometres?)?\b",
+            msg_lower,
+        )
+    if not m:
+        return None
+    try:
+        n = float(m.group(1))
+    except ValueError:
+        return None
+    if n <= 0 or n > 50:
+        return None
+    return n
+
+
+def _looks_like_pathfinder_radius_followup(msg_lower: str) -> bool:
+    """
+    Short follow-ups that only adjust shelter/search radius
+    (e.g. 'now within 2 km', 'make it 5km', 'change radius to 3').
+    """
+    if _parse_radius_km_from_message(msg_lower) is None:
+        return False
+    # Full new search with an explicit place should still match normal pathfinder keywords
+    if any(
+        p in msg_lower
+        for p in (
+            " near ",
+            " close to ",
+            " around ",
+            " from ",
+            " to ",
+            "shelter",
+            "shelters",
+            "evacuation",
+            "evacuate",
+            "find route",
+            "show shelters",
+            "show shelter",
+        )
+    ):
+        # Still a radius follow-up if it's clearly "now/change/make" + distance only-ish
+        if not any(
+            p in msg_lower
+            for p in ("now ", "make it", "change ", "set ", "update ", "adjust ", "try ")
+        ):
+            return False
+    # Prefer short radius-only style messages
+    if len(msg_lower.split()) > 14:
+        return False
+    return bool(
+        re.search(
+            r"\b(within|inside|radius|km|kilometer|kilometre|now|make it|change|set|update|adjust|try)\b",
+            msg_lower,
+        )
+    )
+
+
+def _previous_evacuation_find_route(messages) -> Optional[dict]:
+    """Last assistant find_route that opened Find Shelter/s (for radius follow-ups)."""
+    for i in range(len(messages) - 2, -1, -1):
+        msg = messages[i]
+        content = None
+        msg_type = None
+        if hasattr(msg, "content"):
+            content = msg.content
+            msg_type = getattr(msg, "type", None)
+        elif isinstance(msg, dict):
+            content = msg.get("content")
+            msg_type = msg.get("role")
+        if msg_type not in ("ai", "assistant") or not content:
+            continue
+        try:
+            prev = json.loads(content)
+        except Exception:
+            continue
+        if not isinstance(prev, dict) or prev.get("tool") != "find_route":
+            continue
+        ptab = str(prev.get("pathfinder_tab") or prev.get("pathfinder_mode") or "").lower()
+        if ptab in ("evacuation", "shelter", "shelters") or prev.get("evacuation_mode") is True:
+            return prev
+        # Evac-style: start set, destination empty
+        if (prev.get("start") or "").strip() and not (prev.get("destination") or "").strip():
+            return prev
+    return None
+
+
 def _route_to_pathfinder(msg_lower: str, is_question: bool) -> bool:
     """Whether to route this message to pathfinder_agent (keywords + navigation questions)."""
     pathfinder_keywords = [
@@ -445,6 +540,11 @@ class RouterAgent:
             "list my layers", "what layers are on", "which layers are on",
             "analyze imported", "analyze uploaded", "summarize layer", "summarize layers",
             "visualize my data", "visualize imported", "import / connect",
+            "upload spatial", "upload the following spatial", "upload these spatial",
+            "add spatial file", "add spatial files", "import spatial file",
+            "import spatial files", "put on the map", "onto the map",
+            "spatial files in the map", "spatial file on the map",
+            "attach geojson", "attach kml", "attach shapefile",
         ]
         _layer_inventory = any(
             p in msg_lower
@@ -465,6 +565,8 @@ class RouterAgent:
             for w in ["layer", "import", "geojson", "spatial", "feature"]
         )
         wants_spatial_agent = _layer_inventory or (
+            "spatial files imported onto the map this turn" in msg_lower
+        ) or (
             (_spatial_kw or _spatial_ctx_match) and not is_question
         )
         
@@ -511,6 +613,13 @@ class RouterAgent:
             # Default to clarification agent for other pending actions
             print("Routing to: clarification_agent (has pending action)")
             return "clarification_agent"
+
+        # Shelter radius follow-up (e.g. "now within 2 km") after an evacuation find_route
+        if _looks_like_pathfinder_radius_followup(msg_lower) and _previous_evacuation_find_route(
+            messages
+        ):
+            print("Routing to: pathfinder_agent (evacuation radius follow-up)")
+            return "pathfinder_agent"
         
         # Check if this looks like a follow-up response (yes/no or specific options)
         potential_responses = ["yes", "yeah", "yep", "sure", "ok", "okay", "no", "nope", "nah", "cancel",
@@ -537,6 +646,7 @@ class RouterAgent:
             is_short_response
             and has_no_action_keywords
             and not looks_like_question
+            and not _looks_like_pathfinder_radius_followup(msg_lower)
         )
         
         if msg_lower in potential_responses or has_file_reference or might_be_location:
@@ -724,6 +834,11 @@ class RouterAgent:
         # Pathfinder: clear routes from map (not the same as closing the panel)
         if _wants_pathfinder_clear_routes(msg_lower):
             print("Routing to: pathfinder_agent (clear routes from map)")
+            return "pathfinder_agent"
+
+        # Pathfinder: radius-only follow-up even without prior evac in history helpers above
+        if _looks_like_pathfinder_radius_followup(msg_lower):
+            print("Routing to: pathfinder_agent (radius adjust)")
             return "pathfinder_agent"
 
         # Pathfinder: keywords + navigation-style questions (see _route_to_pathfinder)
